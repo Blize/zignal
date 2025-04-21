@@ -1,0 +1,21 @@
+net
+.DS_Store
+
+#Compiled File Windows
+*.exe
+
+#Compiled File MacOS
+*.out
+*.o
+#Addition
+.vscode
+.idea
+
+# storage
+*.txt
+
+# binary
+terminal_chess
+
+# build
+build
