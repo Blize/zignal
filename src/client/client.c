@@ -74,10 +74,15 @@ void start_client(const char *ip, int port) {
         // Remove newline character from fgets
         buffer[strcspn(buffer, "\n")] = '\0';  
 
-        if (strcmp(buffer, "exit") == 0) {
+        if (strcmp(buffer, "\\exit") == 0) {
             printf("[Info]: Exiting...\n");
             break; 
         }
+	if (strcmp(buffer, "\\clear") == 0) {
+		printf("[INFO]: Clearing screen...\n");
+		printf("\033[2J\033[H");
+		continue;
+	}
 
         send(sock, buffer, strlen(buffer), 0);  // Send message to the server
     }
