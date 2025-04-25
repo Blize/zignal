@@ -32,25 +32,29 @@ pub const Server = struct {
     }
 
     pub fn start(self: *Server) !void {
-        std.log.info("[Server]: Starting Server: {}\n", .{self.address.getPort()});
-
         var pool: std.Thread.Pool = undefined;
         try std.Thread.Pool.init(&pool, .{ .allocator = self.allocator.*, .n_jobs = self.maxClients });
 
         const tpe: u32 = posix.SOCK.STREAM;
         const protocol = posix.IPPROTO.TCP;
         const listener = try posix.socket(self.address.any.family, tpe, protocol);
+
         defer posix.close(listener);
 
         try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
         try posix.bind(listener, &self.address.any, self.address.getOsSockLen());
         try posix.listen(listener, 128);
 
+        var addr: net.Address = undefined;
+        var addr_len: posix.socklen_t = @sizeOf(net.Address);
+        try posix.getsockname(listener, &addr.any, &addr_len);
+        std.log.info("[Server]: Started server on: {}\n", .{addr});
+
         while (true) {
             var clientAddress: net.Address = undefined;
             var clientAddressLen: posix.socklen_t = @sizeOf(net.Address);
             const socket = posix.accept(listener, &clientAddress.any, &clientAddressLen, 0) catch |err| {
-                std.debug.print("error accept: {}\n", .{err});
+                std.log.err("[Server]: Failed to accpept new client: {}", .{err});
                 continue;
             };
 
@@ -139,7 +143,7 @@ pub const Server = struct {
         self.clientsMutex.unlock();
     }
 
-    pub fn broadcastMessage(self: *Server, senderSocket: posix.socket_t, message: []const u8) void {
+    fn broadcastMessage(self: *Server, senderSocket: posix.socket_t, message: []const u8) void {
         self.clientsMutex.lock();
         defer self.clientsMutex.unlock();
 

@@ -52,6 +52,8 @@ pub const Client = struct {
     }
 
     fn receiveMessages(self: Client) void {
+        const stdout = std.io.getStdOut().writer();
+
         while (true) {
             // Step 1: Read 4 bytes for length
             var len_buf: [4]u8 = undefined;
@@ -89,8 +91,8 @@ pub const Client = struct {
                 break;
             }
 
-            std.debug.print("\nMessage: {s}\n", .{msg[0..msg_len]});
-            std.debug.print("Message: ", .{});
+            stdout.print("\nMessage: {s}", .{msg[0..msg_len]}) catch continue;
+            stdout.print("\nMessage: ", .{}) catch continue;
         }
 
         _ = posix.close(self.socket);

@@ -22,7 +22,7 @@ pub fn main() !void {
     }
 
     if (std.mem.eql(u8, args[1], "server")) {
-        const address = try net.Address.parseIp4("127.0.0.1", 5882); // Default port
+        const address = try net.Address.parseIp4("0.0.0.0", 0);
         var buffer: [config.BUFFER_SIZE]u8 = undefined;
         var server = Server.init(&allocator, address, config.MAX_CLIENTS, &buffer);
         try server.start();
