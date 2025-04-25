@@ -19,3 +19,5 @@ terminal_chess
 
 # build
 build
+.zig-cache
+zig-out
