@@ -2,6 +2,12 @@ const std = @import("std");
 const BUFFER_SIZE = @import("../config.zig").BUFFER_SIZE;
 const posix = std.posix;
 
+const CommandResult = enum {
+    handledContinue,
+    handledExit,
+    noCommand,
+};
+
 pub const Client = struct {
     socket: posix.socket_t,
     address: std.net.Address,
@@ -25,9 +31,11 @@ pub const Client = struct {
             if (line == null) break;
             const message = line.?;
 
-            if (std.mem.eql(u8, message, "\\exit")) {
-                stdout.print("[Client]: Exiting...\n", .{}) catch {};
-                break;
+            const result = Client.checkForCommands(message);
+            switch (result) {
+                .handledContinue => continue,
+                .handledExit => break,
+                .noCommand => {},
             }
 
             Client.sendMessage(self.socket, message) catch |err| {
@@ -95,6 +103,17 @@ pub const Client = struct {
             stdout.print("\nMessage: ", .{}) catch continue;
         }
 
-        _ = posix.close(self.socket);
+        posix.close(self.socket);
+    }
+    fn checkForCommands(command: []u8) CommandResult {
+        const stdout = std.io.getStdOut().writer();
+        if (std.mem.eql(u8, command, "\\exit")) {
+            return .handledExit;
+        }
+        if (std.mem.eql(u8, command, "\\clear")) {
+            stdout.print("\x1b[2J\x1b[H", .{}) catch {};
+            return .handledContinue;
+        }
+        return .noCommand;
     }
 };
