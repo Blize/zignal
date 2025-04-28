@@ -38,7 +38,6 @@ pub const Server = struct {
         const tpe: u32 = posix.SOCK.STREAM;
         const protocol = posix.IPPROTO.TCP;
         const listener = try posix.socket(self.address.any.family, tpe, protocol);
-
         defer posix.close(listener);
 
         try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
@@ -82,6 +81,11 @@ pub const Server = struct {
 
     fn handleClient(self: *Server, client: Client) void {
         std.log.info("[Server]: Client {} connected with id {}", .{ client.socket, client.id });
+
+        const welcome = "[Server] |Thanks for joining| [Server]";
+        Server.sendMessage(client.socket, welcome) catch |err| {
+            std.log.err("[Server]: Problem sending init mesage: {}", .{err});
+        };
 
         while (true) {
             var lenBuf: [4]u8 = undefined;
@@ -165,5 +169,16 @@ pub const Server = struct {
                 std.log.warn("[Server]: Failed to send to client {}: {}", .{ socket, err });
             }
         }
+    }
+    fn sendMessage(socket: posix.socket_t, message: []const u8) !void {
+        var len_buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_buf, @intCast(message.len), .little);
+
+        const vec = [_]posix.iovec_const{
+            .{ .base = &len_buf, .len = 4 },
+            .{ .base = message.ptr, .len = message.len },
+        };
+
+        _ = try posix.writev(socket, &vec);
     }
 };
