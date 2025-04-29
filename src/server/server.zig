@@ -4,6 +4,7 @@ const posix = std.posix;
 const Allocator = @import("std").mem.Allocator;
 
 const config = @import("../config.zig");
+const logMessage = @import("../utils.zig").logMessage;
 const Client = @import("../client/client.zig").Client;
 
 const BUFFER_SIZE = config.BUFFER_SIZE;
@@ -19,6 +20,8 @@ pub const Server = struct {
     clients: std.ArrayList(posix.socket_t),
     clientsMutex: std.Thread.Mutex,
 
+    logs: std.ArrayList([]u8),
+
     pub fn init(allocator: *Allocator, address: net.Address, maxClients: ?usize, messageBuffer: *[BUFFER_SIZE]u8) Server {
         return Server{
             .allocator = allocator,
@@ -28,6 +31,7 @@ pub const Server = struct {
             .socket = null,
             .clients = std.ArrayList(posix.socket_t).init(allocator.*),
             .clientsMutex = std.Thread.Mutex{},
+            .logs = std.ArrayList([]u8).init(allocator.*),
         };
     }
 
@@ -47,7 +51,8 @@ pub const Server = struct {
         var addr: net.Address = undefined;
         var addr_len: posix.socklen_t = @sizeOf(net.Address);
         try posix.getsockname(listener, &addr.any, &addr_len);
-        std.log.info("[Server]: Started server on: {}\n", .{addr});
+
+        try logMessage(&self.logs, self.allocator.*, "[Server]: Listening on port", @TypeOf(addr.getPort()), addr.getPort());
 
         while (true) {
             var clientAddress: net.Address = undefined;
