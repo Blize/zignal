@@ -28,14 +28,47 @@ pub fn main() !void {
         var server = Server.init(&allocator, address, config.MAX_CLIENTS, &buffer);
         try server.start();
     } else if (std.mem.eql(u8, args[1], "client")) {
-        if (args.len != 4) {
+        var username: ?[]const u8 = null;
+        var ip: ?[]const u8 = null;
+        var port: ?u16 = null;
+
+        // Parse arguments for client
+        var arg_index: usize = 2;
+
+        while (arg_index < args.len) {
+            if (std.mem.eql(u8, args[arg_index], "-u") or std.mem.eql(u8, args[arg_index], "--username")) {
+                if (arg_index + 1 >= args.len) {
+                    std.debug.print("Error: Username flag requires a value.\n", .{});
+                    printHelp(args[0]);
+                    return error.InvalidArguments;
+                }
+                username = args[arg_index + 1];
+                arg_index += 2;
+            } else if (ip == null) {
+                ip = args[arg_index];
+                arg_index += 1;
+            } else if (port == null) {
+                port = std.fmt.parseInt(u16, args[arg_index], 10) catch {
+                    std.debug.print("Error: Invalid port number '{s}'.\n", .{args[arg_index]});
+                    printHelp(args[0]);
+                    return error.InvalidArguments;
+                };
+                arg_index += 1;
+            } else {
+                std.debug.print("Error: Too many arguments.\n", .{});
+                printHelp(args[0]);
+                return error.InvalidArguments;
+            }
+        }
+
+        // Validate required arguments
+        if (ip == null or port == null) {
+            std.debug.print("Error: Missing required arguments (IP and PORT).\n", .{});
             printHelp(args[0]);
             return error.InvalidArguments;
         }
 
-        const ip = args[2];
-        const port = try std.fmt.parseInt(u16, args[3], 10);
-        const address = try net.Address.parseIp4(ip, port);
+        const address = try net.Address.parseIp4(ip.?, port.?);
         const socket = try posix.socket(address.any.family, posix.SOCK.STREAM, posix.IPPROTO.TCP);
         try posix.connect(socket, &address.any, address.getOsSockLen());
 
@@ -44,8 +77,20 @@ pub fn main() !void {
             .address = address,
             .id = std.crypto.random.int(u32),
             .username = undefined,
+            .username_len = 0,
             .buffer = undefined,
         };
+
+        if (username) |user| {
+            if (user.len > 23) {
+                std.debug.print("Error: Username too long (max 23 characters).\n", .{});
+                return error.InvalidArguments;
+            }
+            @memset(&client.username, 0);
+            @memcpy(client.username[0..user.len], user);
+            client.username_len = user.len;
+        }
+
         try client.startClient();
     } else {
         std.debug.print("Invalid option. Use 'server' or 'client'.\n", .{});

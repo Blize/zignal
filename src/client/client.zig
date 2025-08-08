@@ -12,7 +12,8 @@ pub const Client = struct {
     socket: posix.socket_t,
     address: std.net.Address,
     id: u32,
-    username: [24]?u8,
+    username: [24]u8,
+    username_len: usize,
     buffer: [BUFFER_SIZE]u8,
 
     pub fn startClient(self: *Client) !void {
@@ -38,7 +39,7 @@ pub const Client = struct {
                 .noCommand => {},
             }
 
-            Client.sendMessage(self.socket, message) catch |err| {
+            Client.sendMessage(self.socket, message, self.username[0..self.username_len]) catch |err| {
                 std.log.err("Failed to send message: {}", .{err});
                 break;
             };
@@ -47,13 +48,28 @@ pub const Client = struct {
         _ = posix.close(self.socket);
     }
 
-    fn sendMessage(socket: posix.socket_t, message: []const u8) !void {
+    fn sendMessage(socket: posix.socket_t, message: []u8, username: []const u8) !void {
+        var formatted_message: [BUFFER_SIZE]u8 = undefined;
+        var formatted_len: usize = 0;
+
+        // Use "Anonymous" if no username is provided
+        const display_username = if (username.len > 0) username else "Anonymous";
+
+        // Format message as "username: message"
+        if (std.fmt.bufPrint(formatted_message[0..], "{s}: {s}", .{ display_username, message })) |formatted| {
+            formatted_len = formatted.len;
+        } else |_| {
+            // If formatting fails, just send the original message
+            @memcpy(formatted_message[0..message.len], message);
+            formatted_len = message.len;
+        }
+
         var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_buf, @intCast(message.len), .little);
+        std.mem.writeInt(u32, &len_buf, @intCast(formatted_len), .little);
 
         const vec = [_]posix.iovec_const{
             .{ .base = &len_buf, .len = 4 },
-            .{ .base = message.ptr, .len = message.len },
+            .{ .base = formatted_message[0..formatted_len].ptr, .len = formatted_len },
         };
 
         _ = try posix.writev(socket, &vec);
@@ -99,8 +115,9 @@ pub const Client = struct {
                 break;
             }
 
-            stdout.print("\nMessage: {s}", .{msg[0..msg_len]}) catch continue;
-            stdout.print("\nMessage: ", .{}) catch continue;
+            const message = msg[0..msg_len];
+            stdout.print("{s}\n", .{message}) catch continue;
+            stdout.print("Message: ", .{}) catch continue;
         }
 
         posix.close(self.socket);

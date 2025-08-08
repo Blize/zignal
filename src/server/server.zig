@@ -73,6 +73,7 @@ pub const Server = struct {
                 .address = clientAddress,
                 .id = rand.int(u32),
                 .username = undefined,
+                .username_len = 0,
                 .buffer = undefined,
             };
 
