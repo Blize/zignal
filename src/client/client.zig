@@ -17,32 +17,48 @@ pub const Client = struct {
     buffer: [BUFFER_SIZE]u8,
 
     pub fn startClient(self: *Client) !void {
-        const stdout = std.io.getStdOut().writer();
-        const stdin = std.io.getStdIn().reader();
-        var line_buf: [BUFFER_SIZE]u8 = undefined;
+        var stdout_buffer: [1024]u8 = undefined;
+
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+
+        const writer: *std.io.Writer = &stdout_writer.interface;
 
         // Start receive thread
         var thread = try std.Thread.spawn(.{}, Client.receiveMessages, .{self.*});
         thread.detach();
 
         while (true) {
-            stdout.print("Message: ", .{}) catch continue;
+            var stdin_buffer: [1024]u8 = undefined;
+            var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
+            const reader: *std.io.Reader = &stdin_reader.interface;
 
-            const line = stdin.readUntilDelimiterOrEof(&line_buf, '\n') catch continue;
-            if (line == null) break;
-            const message = line.?;
+            try writer.writeAll("Message: ");
+            try writer.flush();
 
-            const result = Client.checkForCommands(message);
+            // read one line
+            const line = reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
+                error.EndOfStream => {
+                    // User pressed Ctrl-D or pipe closed ? exit gracefully
+                    break;
+                },
+                else => return err,
+            };
+
+            // skip empty input (user pressed Enter with no text)
+            if (line.len == 0) continue;
+
+            const result = Client.checkForCommands(line);
             switch (result) {
                 .handledContinue => continue,
                 .handledExit => break,
                 .noCommand => {},
             }
 
-            Client.sendMessage(self.socket, message, self.username[0..self.username_len]) catch |err| {
+            Client.sendMessage(self.socket, line, self.username[0..self.username_len]) catch |err| {
                 std.log.err("Failed to send message: {}", .{err});
                 break;
             };
+
         }
 
         _ = posix.close(self.socket);
@@ -76,7 +92,10 @@ pub const Client = struct {
     }
 
     fn receiveMessages(self: Client) void {
-        const stdout = std.io.getStdOut().writer();
+        var stdout_buffer: [1024]u8 = undefined;
+        var stdoutWrtier = std.fs.File.stdout().writer(&stdout_buffer);
+
+        const writer: *std.Io.Writer = &stdoutWrtier.interface;
 
         while (true) {
             // Step 1: Read 4 bytes for length
@@ -116,21 +135,28 @@ pub const Client = struct {
             }
 
             const message = msg[0..msg_len];
-            stdout.print("{s}\n", .{message}) catch continue;
-            stdout.print("Message: ", .{}) catch continue;
+            writer.print("{s}\n", .{message}) catch continue;
+            writer.flush() catch {};
+            writer.print("Message: ", .{}) catch continue;
+            writer.flush() catch {};
         }
 
         posix.close(self.socket);
     }
     fn checkForCommands(command: []u8) CommandResult {
-        const stdout = std.io.getStdOut().writer();
+        var stdout_buffer: [8]u8 = undefined;
+        var stdoutWrtier = std.fs.File.stdout().writer(&stdout_buffer);
+
+        const writer: *std.Io.Writer = &stdoutWrtier.interface;
         if (std.mem.eql(u8, command, "\\exit")) {
             return .handledExit;
         }
         if (std.mem.eql(u8, command, "\\clear")) {
-            stdout.print("\x1b[2J\x1b[H", .{}) catch {};
+            writer.print("\x1b[2J\x1b[H", .{}) catch {};
+            writer.flush() catch {};
             return .handledContinue;
         }
+
         return .noCommand;
     }
 };

@@ -26,7 +26,7 @@ pub const Server = struct {
             .maxClients = maxClients orelse MAX_CLIENTS,
             .messageBuffer = messageBuffer,
             .socket = null,
-            .clients = std.ArrayList(posix.socket_t).init(allocator.*),
+            .clients = .empty,
             .clientsMutex = std.Thread.Mutex{},
         };
     }
@@ -59,7 +59,7 @@ pub const Server = struct {
             };
 
             self.clientsMutex.lock();
-            self.clients.append(socket) catch {
+            self.clients.append(self.allocator.*, socket) catch {
                 self.clientsMutex.unlock();
                 std.log.err("[Server]: Failed to add client to list", .{});
                 _ = posix.close(socket);
