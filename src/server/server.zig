@@ -5,6 +5,7 @@ const Allocator = @import("std").mem.Allocator;
 
 const config = @import("../config.zig");
 const Client = @import("../client/client.zig").Client;
+const MessageHandler = @import("../messageHandler.zig").MessageHandler;
 
 const BUFFER_SIZE = config.BUFFER_SIZE;
 const MAX_CLIENTS = config.MAX_CLIENTS;
@@ -84,54 +85,30 @@ pub const Server = struct {
     fn handleClient(self: *Server, client: Client) void {
         std.log.info("[Server]: Client {} connected with id {}", .{ client.socket, client.id });
 
+        const handler = MessageHandler.init(client.socket);
         const welcome = "[Server] |Thanks for joining| [Server]";
-        Server.sendMessage(client.socket, welcome) catch |err| {
+        handler.writeMessage(welcome) catch |err| {
             std.log.err("[Server]: Problem sending init mesage: {}", .{err});
         };
 
+        var message_buffer: [BUFFER_SIZE]u8 = undefined;
+
         while (true) {
-            var lenBuf: [4]u8 = undefined;
-            const lenRead = posix.read(client.socket, &lenBuf) catch |err| {
-                std.log.warn("[Server]: Failed to read length: {}", .{err});
+            const message = handler.readMessage(&message_buffer) catch |err| {
+                std.log.warn("[Server]: Error reading message from client {}: {}", .{ client.id, err });
                 break;
             };
-            if (lenRead == 0) {
+
+            if (message == null) {
                 std.log.info("[Server]: Client {} disconnected", .{client.id});
                 break;
             }
-            if (lenRead != 4) {
-                std.log.warn("[Server]: Partial length read from client {}: {} bytes", .{ client.id, lenRead });
-                break;
-            }
 
-            const msgLen = std.mem.readInt(u32, &lenBuf, .little);
-            if (msgLen > BUFFER_SIZE) {
-                std.log.err("[Server]: Client {} sent too large message: {}", .{ client.id, msgLen });
-                break;
-            }
+            std.log.info("[Server]: Client {} has sent: {s}", .{ client.id, message.? });
 
-            var message: [BUFFER_SIZE]u8 = undefined;
-            var totalRead: usize = 0;
-            while (totalRead < msgLen) {
-                const chunk = posix.read(client.socket, message[totalRead..msgLen]) catch |err| {
-                    std.log.warn("[Server]: Error reading message from client {}: {}", .{ client.id, err });
-                    break;
-                };
-                if (chunk == 0) {
-                    std.log.info("[Server]: Client {} disconnected mid-message", .{client.id});
-                    break;
-                }
-                totalRead += chunk;
-            }
-
-            if (totalRead != msgLen) {
-                std.log.warn("[Server]: Incomplete message from client {}", .{client.id});
-                break;
-            }
-
-            std.log.info("[Server]: Client {} has sent: {s}", .{ client.id, message[0..msgLen] });
-
-            self.broadcastMessage(client.socket, message[0..msgLen]);
+            self.clientsMutex.lock();
+            MessageHandler.broadcastMessage(self.clients.items, message.?, client.socket);
+            self.clientsMutex.unlock();
         }
 
         _ = posix.close(client.socket);
@@ -147,40 +124,5 @@ pub const Server = struct {
             i += 1;
         }
         self.clientsMutex.unlock();
-    }
-
-    fn broadcastMessage(self: *Server, senderSocket: posix.socket_t, message: []const u8) void {
-        self.clientsMutex.lock();
-        defer self.clientsMutex.unlock();
-
-        var lenBuf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &lenBuf, @intCast(message.len), .little);
-
-        for (self.clients.items) |socket| {
-            if (socket == senderSocket) continue;
-
-            const vec = [_]posix.iovec_const{
-                .{ .base = &lenBuf, .len = 4 },
-                .{ .base = message.ptr, .len = message.len },
-            };
-
-            const res = posix.writev(socket, &vec);
-            if (res) |_| {
-                std.log.info("[Server]: Broadcasted to client {}", .{socket});
-            } else |err| {
-                std.log.warn("[Server]: Failed to send to client {}: {}", .{ socket, err });
-            }
-        }
-    }
-    fn sendMessage(socket: posix.socket_t, message: []const u8) !void {
-        var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_buf, @intCast(message.len), .little);
-
-        const vec = [_]posix.iovec_const{
-            .{ .base = &len_buf, .len = 4 },
-            .{ .base = message.ptr, .len = message.len },
-        };
-
-        _ = try posix.writev(socket, &vec);
     }
 };

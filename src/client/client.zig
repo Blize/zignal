@@ -1,6 +1,7 @@
 const std = @import("std");
 const BUFFER_SIZE = @import("../config.zig").BUFFER_SIZE;
 const posix = std.posix;
+const MessageHandler = @import("../messageHandler.zig").MessageHandler;
 
 const CommandResult = enum {
     handledContinue,
@@ -58,7 +59,6 @@ pub const Client = struct {
                 std.log.err("Failed to send message: {}", .{err});
                 break;
             };
-
         }
 
         _ = posix.close(self.socket);
@@ -80,15 +80,8 @@ pub const Client = struct {
             formatted_len = message.len;
         }
 
-        var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_buf, @intCast(formatted_len), .little);
-
-        const vec = [_]posix.iovec_const{
-            .{ .base = &len_buf, .len = 4 },
-            .{ .base = formatted_message[0..formatted_len].ptr, .len = formatted_len },
-        };
-
-        _ = try posix.writev(socket, &vec);
+        const handler = MessageHandler.init(socket);
+        try handler.writeMessage(formatted_message[0..formatted_len]);
     }
 
     fn receiveMessages(self: Client) void {
@@ -97,45 +90,21 @@ pub const Client = struct {
 
         const writer: *std.Io.Writer = &stdoutWrtier.interface;
 
+        const handler = MessageHandler.init(self.socket);
+        var message_buffer: [BUFFER_SIZE]u8 = undefined;
+
         while (true) {
-            // Step 1: Read 4 bytes for length
-            var len_buf: [4]u8 = undefined;
-            const len_read = posix.read(self.socket, &len_buf) catch {
-                std.log.warn("[Client]: Disconnected from server", .{});
+            const message = handler.readMessage(&message_buffer) catch |err| {
+                std.log.warn("[Client]: Error reading message: {}", .{err});
                 break;
             };
 
-            if (len_read != 4) {
-                std.log.warn("[Client]: Partial length header received: {}", .{len_read});
+            if (message == null) {
+                std.log.warn("[Client]: Disconnected from server", .{});
                 break;
             }
 
-            const msg_len = std.mem.readInt(u32, &len_buf, .little);
-            if (msg_len > BUFFER_SIZE) {
-                std.log.err("[Client]: Message too long: {}", .{msg_len});
-                break;
-            }
-
-            // Step 2: Read message content
-            var msg: [BUFFER_SIZE]u8 = undefined;
-            var total_read: usize = 0;
-
-            while (total_read < msg_len) {
-                const chunk = posix.read(self.socket, msg[total_read..msg_len]) catch {
-                    std.log.warn("[Client]: Error reading message content", .{});
-                    break;
-                };
-                if (chunk == 0) break;
-                total_read += chunk;
-            }
-
-            if (total_read != msg_len) {
-                std.log.warn("[Client]: Incomplete message received", .{});
-                break;
-            }
-
-            const message = msg[0..msg_len];
-            writer.print("{s}\n", .{message}) catch continue;
+            writer.print("{s}\n", .{message.?}) catch continue;
             writer.flush() catch {};
             writer.print("Message: ", .{}) catch continue;
             writer.flush() catch {};
