@@ -1,4 +1,4 @@
-# Zignal
+# zignal
 
 An easy simple terminal chatting app, for the rare occasions you are on some device where  
 you don't wanna install anything properly and you wanna talk with people on your local network
@@ -8,13 +8,13 @@ you don't wanna install anything properly and you wanna talk with people on your
 1. Clone the repo:
 
 ```bash
-git clone https://github.com/Blize/Zignal
+git clone https://github.com/Blize/zignal.git
 ```
 
 2. Build the Application:
 
 ```bash
-cd Zignal
+cd zignal
 ```
 
 ```bash
@@ -40,7 +40,7 @@ Inside `zig-out/bin` or wherever the binary is, you have the following options:
 Write following command:
 
 ```bash
-./Zignal server
+./zignal server
 ```
 
 Now people in your netowrk should be able to join on your IP and PORT.  
@@ -56,7 +56,7 @@ To join as a Client you can either use localhost (if the Server is on the same d
 Command:
 
 ```bash
-./Zignal client [IP] [PORT]
+./zignal client [IP] [PORT]
 ```
 
 ### Help
@@ -64,21 +64,27 @@ Command:
 For help write:
 
 ```bash
-./Zignal -h
+./zignal -h
 ```
 
 Output:
 
 ```bash
-Usage: ./Zignal <server|client> [IP] [PORT]
+Usage: ./zignal <server|client> [OPTIONS] <IP> <PORT>
 
 Options:
-  server                Start the server.
-  client <IP> <PORT>    Start the client and connect to the specified IP and PORT.
+  server                              Start the server.
+  client [OPTIONS] <IP> <PORT>        Start the client and connect to the specified IP and PORT.
+
+Client Options:
+  -u, --username <name>   Set username for chat messages (max 23 characters)
 
 Examples:
-  ./Zignal server
-  ./Zignal client 127.0.0.1 8080
+  ./zignal server
+  ./zignal client 127.0.0.1 8080
+  ./zignal client -u Alice 127.0.0.1 8080
+  ./zignal client 127.0.0.1 8080 -u Bob
+  ./zignal client --username Charlie 127.0.0.1 8080
 ```
 
 ### Example

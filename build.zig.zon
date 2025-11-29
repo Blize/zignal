@@ -1,7 +1,7 @@
 .{
-    .name = .Zignal,
-    .version = "0.0.1",
-    .fingerprint = 0x54afc10b8933e50d, // Changing this has security and trust implications.
+    .name = .zignal,
+    .version = "0.1.0",
+    .fingerprint = 0x5303c43d00ef4ba1, // Changing this has security and trust implications.
     .minimum_zig_version = "0.14.0",
     .dependencies = .{},
     .paths = .{
