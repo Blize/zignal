@@ -29,10 +29,6 @@ cd zig-out/bin
 
 ## Usage
 
-> [!NOTE]
-> Currently there is max of 10 users (defined in config.zig)  
-> You can change that, just know that one user is one OS thread!
-
 Inside `zig-out/bin` or wherever the binary is, you have the following options:
 
 ### Server
