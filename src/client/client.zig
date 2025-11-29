@@ -1,7 +1,8 @@
 const std = @import("std");
 const BUFFER_SIZE = @import("../config.zig").BUFFER_SIZE;
 const posix = std.posix;
-const MessageHandler = @import("../messageHandler.zig").MessageHandler;
+const Writer = @import("../writer.zig").Writer;
+const Reader = @import("../reader.zig").Reader;
 
 const CommandResult = enum {
     handledContinue,
@@ -80,8 +81,8 @@ pub const Client = struct {
             formatted_len = message.len;
         }
 
-        const handler = MessageHandler.init(socket);
-        try handler.writeMessage(formatted_message[0..formatted_len]);
+        const writer = Writer.init(socket);
+        try writer.writeMessage(formatted_message[0..formatted_len]);
     }
 
     fn receiveMessages(self: Client) void {
@@ -90,11 +91,10 @@ pub const Client = struct {
 
         const writer: *std.Io.Writer = &stdoutWrtier.interface;
 
-        const handler = MessageHandler.init(self.socket);
         var message_buffer: [BUFFER_SIZE]u8 = undefined;
 
         while (true) {
-            const message = handler.readMessage(&message_buffer) catch |err| {
+            const message = Reader.readClientMessage(self.socket, &message_buffer) catch |err| {
                 std.log.warn("[Client]: Error reading message: {}", .{err});
                 break;
             };

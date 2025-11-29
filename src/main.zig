@@ -8,7 +8,7 @@ const config = @import("config.zig");
 const printHelp = @import("utils.zig").printHelp;
 
 pub fn main() !void {
-    var allocator = std.heap.c_allocator;
+    const allocator = std.heap.c_allocator;
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
@@ -24,8 +24,8 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, args[1], "server")) {
         const address = try net.Address.parseIp4("0.0.0.0", 0);
-        var buffer: [config.BUFFER_SIZE]u8 = undefined;
-        var server = Server.init(&allocator, address, config.MAX_CLIENTS, &buffer);
+        var server = try Server.init(allocator, address, config.MAX_CLIENTS);
+        defer server.deinit();
         try server.start();
     } else if (std.mem.eql(u8, args[1], "client")) {
         var username: ?[]const u8 = null;
