@@ -3,8 +3,10 @@ const vaxis = @import("vaxis");
 const posix = std.posix;
 
 const config = @import("../config.zig");
+const utils = @import("../utils.zig");
 const Writer = @import("../writer.zig").Writer;
 const Reader = @import("../reader.zig").Reader;
+const ChatMessage = @import("client.zig").ChatMessage;
 
 const BUFFER_SIZE = config.BUFFER_SIZE;
 
@@ -13,24 +15,8 @@ const Key = vaxis.Key;
 const Window = vaxis.Window;
 const TextInput = vaxis.widgets.TextInput;
 
-// Zig logo color: RGB(235, 168, 66)
-const ZIG_COLOR: Cell.Color = .{ .rgb = .{ 235, 168, 66 } };
-const ZIG_COLOR_DIM: Cell.Color = .{ .rgb = .{ 180, 128, 50 } };
-const BG_COLOR: Cell.Color = .{ .rgb = .{ 30, 30, 35 } };
-const TEXT_COLOR: Cell.Color = .{ .rgb = .{ 220, 220, 220 } };
-const TIMESTAMP_COLOR: Cell.Color = .{ .rgb = .{ 120, 120, 130 } };
-
-// User colors for different usernames (cycle through these)
-const USER_COLORS = [_]Cell.Color{
-    .{ .rgb = .{ 235, 168, 66 } }, // Zig orange
-    .{ .rgb = .{ 86, 182, 194 } }, // Cyan
-    .{ .rgb = .{ 198, 120, 221 } }, // Purple
-    .{ .rgb = .{ 152, 195, 121 } }, // Green
-    .{ .rgb = .{ 224, 108, 117 } }, // Red
-    .{ .rgb = .{ 229, 192, 123 } }, // Yellow
-    .{ .rgb = .{ 97, 175, 239 } }, // Blue
-    .{ .rgb = .{ 209, 154, 102 } }, // Orange
-};
+// Import colors from utils
+const colors = utils.colors;
 
 /// Event types for our TUI application
 const Event = union(enum) {
@@ -38,34 +24,6 @@ const Event = union(enum) {
     winsize: vaxis.Winsize,
     focus_in,
     focus_out,
-};
-
-/// Chat message structure
-const ChatMessage = struct {
-    content: []const u8,
-    timestamp: i64,
-    allocator: std.mem.Allocator,
-
-    fn create(allocator: std.mem.Allocator, content: []const u8) !ChatMessage {
-        const owned = try allocator.dupe(u8, content);
-        return .{
-            .content = owned,
-            .timestamp = std.time.timestamp(),
-            .allocator = allocator,
-        };
-    }
-
-    fn destroy(self: *ChatMessage) void {
-        self.allocator.free(self.content);
-    }
-
-    fn getTimestampStr(self: *const ChatMessage, buf: []u8) []const u8 {
-        const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(self.timestamp) };
-        const day_seconds = epoch_seconds.getDaySeconds();
-        const hours = day_seconds.getHoursIntoDay();
-        const minutes = day_seconds.getMinutesIntoHour();
-        return std.fmt.bufPrint(buf, "[{d:0>2}:{d:0>2}]", .{ hours, minutes }) catch "[??:??]";
-    }
 };
 
 /// TUI Client for the chat application
@@ -250,13 +208,13 @@ pub const TuiClient = struct {
 
         // Border style using Zig color
         const border_style: Cell.Style = .{
-            .fg = ZIG_COLOR,
+            .fg = colors.zig,
         };
 
         // Draw title bar
         const title_style: Cell.Style = .{
-            .fg = BG_COLOR,
-            .bg = ZIG_COLOR,
+            .fg = colors.background,
+            .bg = colors.zig,
             .bold = true,
         };
 
@@ -275,8 +233,8 @@ pub const TuiClient = struct {
         // Connection status indicator (right side of title bar)
         const status_indicator = if (self.connected) " ● Connected " else " ○ Disconnected ";
         const status_indicator_style: Cell.Style = .{
-            .fg = if (self.connected) .{ .rgb = .{ 152, 195, 121 } } else .{ .rgb = .{ 224, 108, 117 } },
-            .bg = ZIG_COLOR,
+            .fg = if (self.connected) colors.connected else colors.disconnected,
+            .bg = colors.zig,
             .bold = true,
         };
         const status_start: u16 = if (width > status_indicator.len) @intCast(width - status_indicator.len) else 0;
@@ -320,7 +278,7 @@ pub const TuiClient = struct {
 
         // === STATUS BAR ===
         const status_style: Cell.Style = .{
-            .fg = ZIG_COLOR_DIM,
+            .fg = colors.zig_dim,
         };
         const status_row: u16 = @intCast(height - 1);
 
@@ -393,11 +351,11 @@ pub const TuiClient = struct {
             var timestamp_buf: [8]u8 = undefined;
             const timestamp = msg.getTimestampStr(&timestamp_buf);
 
-            const timestamp_style: Cell.Style = .{ .fg = TIMESTAMP_COLOR };
+            const timestamp_style: Cell.Style = .{ .fg = colors.timestamp };
 
             // Determine message style based on content
             if (std.mem.startsWith(u8, msg.content, "[System]")) {
-                const style: Cell.Style = .{ .fg = ZIG_COLOR, .italic = true };
+                const style: Cell.Style = .{ .fg = colors.zig, .italic = true };
                 const segments = [_]Cell.Segment{
                     .{ .text = timestamp, .style = timestamp_style },
                     .{ .text = " ", .style = .{} },
@@ -405,7 +363,7 @@ pub const TuiClient = struct {
                 };
                 _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
             } else if (std.mem.startsWith(u8, msg.content, "[Server]")) {
-                const style: Cell.Style = .{ .fg = ZIG_COLOR, .bold = true };
+                const style: Cell.Style = .{ .fg = colors.zig, .bold = true };
                 const segments = [_]Cell.Segment{
                     .{ .text = timestamp, .style = timestamp_style },
                     .{ .text = " ", .style = .{} },
@@ -413,7 +371,7 @@ pub const TuiClient = struct {
                 };
                 _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
             } else if (std.mem.startsWith(u8, msg.content, "[Help]")) {
-                const style: Cell.Style = .{ .fg = ZIG_COLOR_DIM, .italic = true };
+                const style: Cell.Style = .{ .fg = colors.zig_dim, .italic = true };
                 const segments = [_]Cell.Segment{
                     .{ .text = timestamp, .style = timestamp_style },
                     .{ .text = " ", .style = .{} },
@@ -427,9 +385,9 @@ pub const TuiClient = struct {
                 const message_part = msg.content[colon_pos + 2 ..];
 
                 // Get color based on username hash
-                const user_color = getUserColor(username_part);
+                const user_color = colors.forUsername(username_part);
                 const username_style: Cell.Style = .{ .fg = user_color, .bold = true };
-                const text_style: Cell.Style = .{ .fg = TEXT_COLOR };
+                const text_style: Cell.Style = .{ .fg = colors.text };
 
                 const segments = [_]Cell.Segment{
                     .{ .text = timestamp, .style = timestamp_style },
@@ -441,7 +399,7 @@ pub const TuiClient = struct {
                 _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
             } else {
                 // Regular message
-                const style: Cell.Style = .{ .fg = TEXT_COLOR };
+                const style: Cell.Style = .{ .fg = colors.text };
                 const segments = [_]Cell.Segment{
                     .{ .text = timestamp, .style = timestamp_style },
                     .{ .text = " ", .style = .{} },
@@ -452,15 +410,6 @@ pub const TuiClient = struct {
 
             row += @intCast(data.lines);
         }
-    }
-
-    fn getUserColor(username: []const u8) Cell.Color {
-        // Simple hash to get consistent color per username
-        var hash: u32 = 0;
-        for (username) |c| {
-            hash = hash *% 31 +% c;
-        }
-        return USER_COLORS[hash % USER_COLORS.len];
     }
 
     fn sendMessage(self: *TuiClient) !void {
