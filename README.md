@@ -87,31 +87,15 @@ Examples:
 
 ![example_image](./public/example.png)
 
-### TUI Features
+### Some Features
 
 The client now includes a modern TUI (Terminal User Interface) built with [libvaxis](https://github.com/rockorager/libvaxis):
-
-- **Title Bar**: Displays "Zignal Chat" centered at the top
-- **Chat Area**: Scrollable message history with color-coded messages:
-  - System messages in yellow
-  - Server messages in cyan
-  - Usernames in magenta/bold
-  - Regular text in white
-- **Input Box**: Text input with cursor support at the bottom
-- **Status Bar**: Shows current username and keyboard shortcuts
-
-**Keyboard Shortcuts:**
-- `Enter`: Send message
-- `Ctrl+C`: Exit the application
-- `Ctrl+L`: Refresh the screen
-- `PgUp/PgDn`: Scroll through message history
-- `Backspace`: Delete character before cursor
-- Standard text input navigation (arrow keys, Home, End, etc.)
 
 **Commands:**
 - `/exit`: Exit the application
 - `/clear`: Clear the message history
 - `/help`: Show available commands
+- More to come
 
 ### Future Work
 
@@ -122,4 +106,5 @@ Additional TUI improvements planned:
 
 2. Server:
    - Server Log Box with TUI
+   - Core information about the server displayed
    - Nicer colors / Filtering between certain types of logs
