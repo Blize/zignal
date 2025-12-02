@@ -18,6 +18,19 @@ const ZIG_COLOR: Cell.Color = .{ .rgb = .{ 235, 168, 66 } };
 const ZIG_COLOR_DIM: Cell.Color = .{ .rgb = .{ 180, 128, 50 } };
 const BG_COLOR: Cell.Color = .{ .rgb = .{ 30, 30, 35 } };
 const TEXT_COLOR: Cell.Color = .{ .rgb = .{ 220, 220, 220 } };
+const TIMESTAMP_COLOR: Cell.Color = .{ .rgb = .{ 120, 120, 130 } };
+
+// User colors for different usernames (cycle through these)
+const USER_COLORS = [_]Cell.Color{
+    .{ .rgb = .{ 235, 168, 66 } }, // Zig orange
+    .{ .rgb = .{ 86, 182, 194 } }, // Cyan
+    .{ .rgb = .{ 198, 120, 221 } }, // Purple
+    .{ .rgb = .{ 152, 195, 121 } }, // Green
+    .{ .rgb = .{ 224, 108, 117 } }, // Red
+    .{ .rgb = .{ 229, 192, 123 } }, // Yellow
+    .{ .rgb = .{ 97, 175, 239 } }, // Blue
+    .{ .rgb = .{ 209, 154, 102 } }, // Orange
+};
 
 /// Event types for our TUI application
 const Event = union(enum) {
@@ -30,18 +43,28 @@ const Event = union(enum) {
 /// Chat message structure
 const ChatMessage = struct {
     content: []const u8,
+    timestamp: i64,
     allocator: std.mem.Allocator,
 
     fn create(allocator: std.mem.Allocator, content: []const u8) !ChatMessage {
         const owned = try allocator.dupe(u8, content);
         return .{
             .content = owned,
+            .timestamp = std.time.timestamp(),
             .allocator = allocator,
         };
     }
 
     fn destroy(self: *ChatMessage) void {
         self.allocator.free(self.content);
+    }
+
+    fn getTimestampStr(self: *const ChatMessage, buf: []u8) []const u8 {
+        const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(self.timestamp) };
+        const day_seconds = epoch_seconds.getDaySeconds();
+        const hours = day_seconds.getHoursIntoDay();
+        const minutes = day_seconds.getMinutesIntoHour();
+        return std.fmt.bufPrint(buf, "[{d:0>2}:{d:0>2}]", .{ hours, minutes }) catch "[??:??]";
     }
 };
 
@@ -62,6 +85,7 @@ pub const TuiClient = struct {
 
     // Running state
     running: bool,
+    connected: bool,
 
     // Receiver thread
     receiver_thread: ?std.Thread,
@@ -91,6 +115,7 @@ pub const TuiClient = struct {
             .text_input = TextInput.init(allocator),
             .scroll_offset = 0,
             .running = true,
+            .connected = true,
             .receiver_thread = null,
             .pending_messages = .{},
             .message_mutex = .{},
@@ -247,6 +272,17 @@ pub const TuiClient = struct {
         const title_segment = [_]Cell.Segment{.{ .text = title_text, .style = title_style }};
         _ = win.print(&title_segment, .{ .col_offset = title_start });
 
+        // Connection status indicator (right side of title bar)
+        const status_indicator = if (self.connected) " ● Connected " else " ○ Disconnected ";
+        const status_indicator_style: Cell.Style = .{
+            .fg = if (self.connected) .{ .rgb = .{ 152, 195, 121 } } else .{ .rgb = .{ 224, 108, 117 } },
+            .bg = ZIG_COLOR,
+            .bold = true,
+        };
+        const status_start: u16 = if (width > status_indicator.len) @intCast(width - status_indicator.len) else 0;
+        const status_segment = [_]Cell.Segment{.{ .text = status_indicator, .style = status_indicator_style }};
+        _ = win.print(&status_segment, .{ .col_offset = status_start });
+
         // === CHAT VIEW with border ===
         const input_height: u16 = 3;
         const chat_height: u16 = @intCast(@max(1, height - 4 - input_height));
@@ -305,8 +341,11 @@ pub const TuiClient = struct {
         const messages = self.messages.items;
         if (messages.len == 0) return;
 
-        // Calculate how many messages we can show
-        var lines_used: usize = 0;
+        const content_width = if (area.width > 2) area.width - 2 else area.width;
+
+        // Calculate how many lines each message takes (with word wrap)
+        // and collect messages to display
+        var total_lines: usize = 0;
         var msg_index = messages.len;
 
         // Skip messages based on scroll offset
@@ -316,65 +355,112 @@ pub const TuiClient = struct {
             scroll_remaining -= 1;
         }
 
-        // Collect messages to display
-        var display_indices: [256]usize = undefined;
+        // Collect messages and calculate wrapped lines
+        var display_data: [256]struct { idx: usize, lines: usize } = undefined;
         var display_count: usize = 0;
 
         var temp_idx = msg_index;
-        while (temp_idx > 0 and lines_used < max_lines) {
+        while (temp_idx > 0 and total_lines < max_lines) {
             temp_idx -= 1;
-            if (display_count < display_indices.len) {
-                display_indices[display_count] = temp_idx;
+            const msg = &messages[temp_idx];
+
+            // Calculate lines needed for this message (timestamp + content)
+            // Format: [HH:MM] username: message
+            var timestamp_buf: [8]u8 = undefined;
+            const timestamp = msg.getTimestampStr(&timestamp_buf);
+            const prefix_len = timestamp.len + 1; // timestamp + space
+
+            const msg_display_len = prefix_len + msg.content.len;
+            const lines_needed = (msg_display_len + content_width - 1) / content_width;
+            const actual_lines = @max(1, lines_needed);
+
+            if (display_count < display_data.len) {
+                display_data[display_count] = .{ .idx = temp_idx, .lines = actual_lines };
                 display_count += 1;
             }
-            lines_used += 1;
+            total_lines += actual_lines;
         }
 
         // Render from top to bottom (reverse order)
-        var row: u16 = @intCast(@max(0, @as(i32, max_lines) - @as(i32, @intCast(lines_used))));
+        var row: u16 = @intCast(@max(0, @as(i32, max_lines) - @as(i32, @intCast(total_lines))));
         var i = display_count;
         while (i > 0) {
             i -= 1;
-            const msg = messages[display_indices[i]];
+            const data = display_data[i];
+            const msg = &messages[data.idx];
+
+            // Get timestamp
+            var timestamp_buf: [8]u8 = undefined;
+            const timestamp = msg.getTimestampStr(&timestamp_buf);
+
+            const timestamp_style: Cell.Style = .{ .fg = TIMESTAMP_COLOR };
 
             // Determine message style based on content
-            var style: Cell.Style = .{ .fg = TEXT_COLOR }; // Default text color
-
             if (std.mem.startsWith(u8, msg.content, "[System]")) {
-                style = .{ .fg = ZIG_COLOR, .italic = true }; // Zig color for system
+                const style: Cell.Style = .{ .fg = ZIG_COLOR, .italic = true };
+                const segments = [_]Cell.Segment{
+                    .{ .text = timestamp, .style = timestamp_style },
+                    .{ .text = " ", .style = .{} },
+                    .{ .text = msg.content, .style = style },
+                };
+                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
             } else if (std.mem.startsWith(u8, msg.content, "[Server]")) {
-                style = .{ .fg = ZIG_COLOR, .bold = true }; // Zig color for server
+                const style: Cell.Style = .{ .fg = ZIG_COLOR, .bold = true };
+                const segments = [_]Cell.Segment{
+                    .{ .text = timestamp, .style = timestamp_style },
+                    .{ .text = " ", .style = .{} },
+                    .{ .text = msg.content, .style = style },
+                };
+                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
             } else if (std.mem.startsWith(u8, msg.content, "[Help]")) {
-                style = .{ .fg = ZIG_COLOR_DIM, .italic = true };
+                const style: Cell.Style = .{ .fg = ZIG_COLOR_DIM, .italic = true };
+                const segments = [_]Cell.Segment{
+                    .{ .text = timestamp, .style = timestamp_style },
+                    .{ .text = " ", .style = .{} },
+                    .{ .text = msg.content, .style = style },
+                };
+                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
             } else if (std.mem.indexOf(u8, msg.content, ": ")) |colon_pos| {
-                // Render username in Zig color, message in text color
-                const username_part = msg.content[0 .. colon_pos + 2]; // Include ": "
+                // Render username with unique color, message in text color
+                const username_part = msg.content[0..colon_pos];
+                const separator = ": ";
                 const message_part = msg.content[colon_pos + 2 ..];
 
-                // Username style
-                const username_style: Cell.Style = .{
-                    .fg = ZIG_COLOR,
-                    .bold = true,
-                };
+                // Get color based on username hash
+                const user_color = getUserColor(username_part);
+                const username_style: Cell.Style = .{ .fg = user_color, .bold = true };
+                const text_style: Cell.Style = .{ .fg = TEXT_COLOR };
 
                 const segments = [_]Cell.Segment{
+                    .{ .text = timestamp, .style = timestamp_style },
+                    .{ .text = " ", .style = .{} },
                     .{ .text = username_part, .style = username_style },
-                    .{ .text = message_part, .style = style },
+                    .{ .text = separator, .style = username_style },
+                    .{ .text = message_part, .style = text_style },
                 };
-
-                _ = area.print(&segments, .{ .row_offset = row });
-                row += 1;
-                continue;
+                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
+            } else {
+                // Regular message
+                const style: Cell.Style = .{ .fg = TEXT_COLOR };
+                const segments = [_]Cell.Segment{
+                    .{ .text = timestamp, .style = timestamp_style },
+                    .{ .text = " ", .style = .{} },
+                    .{ .text = msg.content, .style = style },
+                };
+                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
             }
 
-            // Regular message rendering using print
-            const segments = [_]Cell.Segment{
-                .{ .text = msg.content, .style = style },
-            };
-            _ = area.print(&segments, .{ .row_offset = row });
-
-            row += 1;
+            row += @intCast(data.lines);
         }
+    }
+
+    fn getUserColor(username: []const u8) Cell.Color {
+        // Simple hash to get consistent color per username
+        var hash: u32 = 0;
+        for (username) |c| {
+            hash = hash *% 31 +% c;
+        }
+        return USER_COLORS[hash % USER_COLORS.len];
     }
 
     fn sendMessage(self: *TuiClient) !void {
@@ -477,6 +563,7 @@ pub const TuiClient = struct {
                     };
                     self.message_mutex.unlock();
 
+                    self.connected = false;
                     self.running = false;
                 }
                 break;
@@ -491,6 +578,7 @@ pub const TuiClient = struct {
                 };
                 self.message_mutex.unlock();
 
+                self.connected = false;
                 self.running = false;
                 break;
             }
