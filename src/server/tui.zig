@@ -239,19 +239,17 @@ pub const ServerTui = struct {
                     return;
                 }
 
-                // Scroll logs
-                if (key.matches(Key.page_up, .{})) {
+                // Scroll logs with arrow keys
+                if (key.matches(Key.up, .{})) {
                     if (self.scroll_offset < self.logs.items.len) {
-                        self.scroll_offset += 5;
+                        self.scroll_offset += 1;
                     }
                     return;
                 }
 
-                if (key.matches(Key.page_down, .{})) {
-                    if (self.scroll_offset >= 5) {
-                        self.scroll_offset -= 5;
-                    } else {
-                        self.scroll_offset = 0;
+                if (key.matches(Key.down, .{})) {
+                    if (self.scroll_offset > 0) {
+                        self.scroll_offset -= 1;
                     }
                     return;
                 }
@@ -315,7 +313,7 @@ pub const ServerTui = struct {
 
         // === LOGS BOX ===
         const logs_row: u16 = filter_row + filter_height;
-        const logs_height: u16 = @intCast(@max(1, height - logs_row - 2));
+        const logs_height: u16 = @intCast(@max(1, height - logs_row - 1));
         const logs_box = win.child(.{
             .x_off = 0,
             .y_off = logs_row,
@@ -324,19 +322,6 @@ pub const ServerTui = struct {
             .border = .{ .where = .all, .style = border_style },
         });
         self.renderLogs(logs_box, logs_height - 2);
-
-        // === STATUS BAR ===
-        const status_style: Cell.Style = .{ .fg = colors.zig_dim };
-        const status_row: u16 = @intCast(height - 1);
-        const status_text = " PageUp/Down: Scroll | Esc: Clear Filter | Ctrl+C: Shutdown ";
-
-        for (status_text, 0..) |char, i| {
-            if (i >= width) break;
-            win.writeCell(@intCast(i), status_row, .{
-                .char = .{ .grapheme = &[_]u8{char}, .width = 1 },
-                .style = status_style,
-            });
-        }
 
         try self.vx.render(self.tty.writer());
     }
@@ -428,14 +413,19 @@ pub const ServerTui = struct {
             return;
         }
 
+        // Clamp scroll offset to valid range
+        if (self.scroll_offset > filtered_count) {
+            self.scroll_offset = filtered_count;
+        }
+
         // Calculate visible range (from bottom with scroll offset)
-        const start_idx = if (filtered_count > self.scroll_offset) filtered_count - self.scroll_offset else 0;
-        const visible_count = @min(start_idx, max_lines);
-        const display_start = if (start_idx > visible_count) start_idx - visible_count else 0;
+        const end_idx = if (filtered_count > self.scroll_offset) filtered_count - self.scroll_offset else 0;
+        const visible_count = @min(end_idx, max_lines);
+        const display_start = if (end_idx > visible_count) end_idx - visible_count else 0;
 
         var row: u16 = 0;
         var i: usize = display_start;
-        while (i < start_idx and row < max_lines) : (i += 1) {
+        while (i < end_idx and row < max_lines) : (i += 1) {
             const entry = &self.logs.items[filtered_indices[i]];
 
             var timestamp_buf: [8]u8 = undefined;
@@ -462,8 +452,5 @@ pub const ServerTui = struct {
     fn addLog(self: *ServerTui, message: []const u8, level: LogEntry.Level) !void {
         const entry = try LogEntry.create(self.allocator, message, level);
         try self.logs.append(self.allocator, entry);
-
-        // Auto-scroll to bottom
-        self.scroll_offset = 0;
     }
 };

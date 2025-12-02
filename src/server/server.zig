@@ -211,7 +211,7 @@ pub const Server = struct {
 
                 // Check for errors or disconnection
                 if (revents & posix.POLL.HUP == posix.POLL.HUP) {
-                    self.log("Client disconnected", .{}, .info);
+                    self.log("Client disconnected", .{}, .warn);
                     self.removeClient(i);
                     continue;
                 }
