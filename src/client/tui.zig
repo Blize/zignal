@@ -13,13 +13,18 @@ const Key = vaxis.Key;
 const Window = vaxis.Window;
 const TextInput = vaxis.widgets.TextInput;
 
+// Zig logo color: RGB(235, 168, 66)
+const ZIG_COLOR: Cell.Color = .{ .rgb = .{ 235, 168, 66 } };
+const ZIG_COLOR_DIM: Cell.Color = .{ .rgb = .{ 180, 128, 50 } };
+const BG_COLOR: Cell.Color = .{ .rgb = .{ 30, 30, 35 } };
+const TEXT_COLOR: Cell.Color = .{ .rgb = .{ 220, 220, 220 } };
+
 /// Event types for our TUI application
 const Event = union(enum) {
     key_press: Key,
     winsize: vaxis.Winsize,
     focus_in,
     focus_out,
-    mouse: vaxis.Mouse,
 };
 
 /// Chat message structure
@@ -82,12 +87,12 @@ pub const TuiClient = struct {
             .username = username,
             .vx = vx,
             .tty = tty,
-            .messages = .{ .items = &.{}, .capacity = 0 },
+            .messages = .{},
             .text_input = TextInput.init(allocator),
             .scroll_offset = 0,
             .running = true,
             .receiver_thread = null,
-            .pending_messages = .{ .items = &.{}, .capacity = 0 },
+            .pending_messages = .{},
             .message_mutex = .{},
         };
 
@@ -99,7 +104,7 @@ pub const TuiClient = struct {
         // This will cause the blocking read to fail and the thread to exit
         self.running = false;
         posix.close(self.socket);
-        
+
         if (self.receiver_thread) |thread| {
             thread.join();
         }
@@ -136,6 +141,7 @@ pub const TuiClient = struct {
         defer loop.stop();
 
         try self.vx.enterAltScreen(self.tty.writer());
+
         try self.vx.queryTerminal(self.tty.writer(), 1 * std.time.ns_per_s);
 
         // Start receiver thread
@@ -213,14 +219,19 @@ pub const TuiClient = struct {
         const width = win.width;
         const height = win.height;
 
-        if (height < 5 or width < 20) {
+        if (height < 10 or width < 40) {
             return; // Terminal too small
         }
 
+        // Border style using Zig color
+        const border_style: Cell.Style = .{
+            .fg = ZIG_COLOR,
+        };
+
         // Draw title bar
         const title_style: Cell.Style = .{
-            .fg = .{ .index = 15 }, // White
-            .bg = .{ .index = 4 }, // Blue
+            .fg = BG_COLOR,
+            .bg = ZIG_COLOR,
             .bold = true,
         };
 
@@ -230,72 +241,54 @@ pub const TuiClient = struct {
             win.writeCell(col, 0, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = title_style });
         }
 
-        // Write title text using print for proper grapheme handling
-        const title_text = "zignal";
-
+        // Write title text
+        const title_text = " ⚡ ZIGNAL ";
         const title_start: u16 = if (width > title_text.len) @intCast((width - title_text.len) / 2) else 0;
         const title_segment = [_]Cell.Segment{.{ .text = title_text, .style = title_style }};
         _ = win.print(&title_segment, .{ .col_offset = title_start });
 
-        // Draw chat area (height - 4 for title, separator, input box, and status)
-        const chat_height: u16 = @intCast(@max(1, height - 10));
+        // === CHAT VIEW with border ===
+        const input_height: u16 = 3;
+        const chat_height: u16 = @intCast(@max(1, height - 4 - input_height));
         const chat_area = win.child(.{
-            .x_off = 1,
+            .x_off = 0,
             .y_off = 1,
-            .width = width - 2,
+            .width = width,
             .height = chat_height,
+            .border = .{
+                .where = .all,
+                .style = border_style,
+            },
         });
 
-        // Render messages
-        self.renderMessages(chat_area, chat_height);
+        // Render messages inside chat area (account for border)
+        self.renderMessages(chat_area, chat_height - 2);
 
-        // Draw separator line
-        const separator_style: Cell.Style = .{
-            .fg = .{ .index = 8 }, // Gray
-        };
-        const sep_row: u16 = @intCast(height - 3);
-        col = 0;
-        while (col < width) : (col += 1) {
-            win.writeCell(col, sep_row, .{
-                .char = .{ .grapheme = "─", .width = 1 },
-                .style = separator_style,
-            });
-        }
+        // === INPUT AREA with border ===
+        const input_row: u16 = 1 + chat_height;
 
-        // Draw input prompt
-        const prompt_style: Cell.Style = .{
-            .fg = .{ .index = 2 }, // Green
-            .bold = true,
-        };
-        const input_row: u16 = @intCast(height - 2);
-        win.writeCell(0, input_row, .{
-            .char = .{ .grapheme = ">", .width = 1 },
-            .style = prompt_style,
-        });
-        win.writeCell(1, input_row, .{
-            .char = .{ .grapheme = " ", .width = 1 },
-            .style = prompt_style,
+        // Input box with border
+        const input_box = win.child(.{
+            .x_off = 0,
+            .y_off = input_row,
+            .width = width,
+            .height = input_height,
+            .border = .{
+                .where = .all,
+                .style = border_style,
+            },
         });
 
-        // Draw text input
-        const input_area = win.child(.{
-            .x_off = 2,
-            .y_off = @intCast(height - 2),
-            .width = width - 3,
-            .height = 1,
-        });
-        self.text_input.draw(input_area);
+        // Draw text input inside the bordered box
+        self.text_input.draw(input_box);
 
-        // Draw status bar
+        // === STATUS BAR ===
         const status_style: Cell.Style = .{
-            .fg = .{ .index = 8 }, // Gray
+            .fg = ZIG_COLOR_DIM,
         };
         const status_row: u16 = @intCast(height - 1);
 
-        var status_buf: [128]u8 = undefined;
-        const status_text = std.fmt.bufPrint(&status_buf, " User: {s} | /help | Ctrl+C: Exit | PgUp/PgDn: Scroll ", .{
-            if (self.username.len > 0) self.username else "Anonymous",
-        }) catch " Ctrl+C: Exit ";
+        const status_text = " Enter: Send | PageUp/Down: Scroll | Ctrl+C: Exit ";
 
         for (status_text, 0..) |char, i| {
             if (i >= width) break;
@@ -345,20 +338,22 @@ pub const TuiClient = struct {
             const msg = messages[display_indices[i]];
 
             // Determine message style based on content
-            var style: Cell.Style = .{ .fg = .{ .index = 15 } }; // Default white
+            var style: Cell.Style = .{ .fg = TEXT_COLOR }; // Default text color
 
             if (std.mem.startsWith(u8, msg.content, "[System]")) {
-                style = .{ .fg = .{ .index = 3 }, .italic = true }; // Yellow for system
+                style = .{ .fg = ZIG_COLOR, .italic = true }; // Zig color for system
             } else if (std.mem.startsWith(u8, msg.content, "[Server]")) {
-                style = .{ .fg = .{ .index = 6 }, .bold = true }; // Cyan for server
+                style = .{ .fg = ZIG_COLOR, .bold = true }; // Zig color for server
+            } else if (std.mem.startsWith(u8, msg.content, "[Help]")) {
+                style = .{ .fg = ZIG_COLOR_DIM, .italic = true };
             } else if (std.mem.indexOf(u8, msg.content, ": ")) |colon_pos| {
-                // Render username in different color, message in white
+                // Render username in Zig color, message in text color
                 const username_part = msg.content[0 .. colon_pos + 2]; // Include ": "
                 const message_part = msg.content[colon_pos + 2 ..];
 
                 // Username style
                 const username_style: Cell.Style = .{
-                    .fg = .{ .index = 5 }, // Magenta
+                    .fg = ZIG_COLOR,
                     .bold = true,
                 };
 
@@ -387,13 +382,13 @@ pub const TuiClient = struct {
         const first_half = self.text_input.buf.firstHalf();
         const second_half = self.text_input.buf.secondHalf();
         const message_len = first_half.len + second_half.len;
-        
+
         if (message_len == 0) return;
 
         // Combine the two halves into a temporary buffer
         var message_buf: [BUFFER_SIZE]u8 = undefined;
         if (message_len > BUFFER_SIZE) return; // Message too long
-        
+
         @memcpy(message_buf[0..first_half.len], first_half);
         @memcpy(message_buf[first_half.len..message_len], second_half);
         const message = message_buf[0..message_len];

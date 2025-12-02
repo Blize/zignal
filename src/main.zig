@@ -78,7 +78,6 @@ pub fn main() !void {
             .id = std.crypto.random.int(u32),
             .username = undefined,
             .username_len = 0,
-            .buffer = undefined,
         };
 
         if (username) |user| {
