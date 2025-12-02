@@ -65,7 +65,10 @@ pub const Client = struct {
     username_len: usize,
 
     pub fn startClient(self: *Client) !void {
-        const allocator = std.heap.c_allocator;
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
+        const allocator = gpa.allocator();
+
         const username = self.username[0..self.username_len];
 
         var tui = try TuiClient.init(allocator, self.socket, username);
