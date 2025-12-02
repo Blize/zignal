@@ -6,7 +6,9 @@ const config = @import("../config.zig");
 const utils = @import("../utils.zig");
 const Writer = @import("../writer.zig").Writer;
 const Reader = @import("../reader.zig").Reader;
-const ChatMessage = @import("client.zig").ChatMessage;
+const client = @import("client.zig");
+const ChatMessage = client.ChatMessage;
+const Command = client.Command;
 
 const BUFFER_SIZE = config.BUFFER_SIZE;
 
@@ -15,7 +17,6 @@ const Key = vaxis.Key;
 const Window = vaxis.Window;
 const TextInput = vaxis.widgets.TextInput;
 
-// Import colors from utils
 const colors = utils.colors;
 
 /// Event types for our TUI application
@@ -32,7 +33,6 @@ pub const TuiClient = struct {
     socket: posix.socket_t,
     username: []const u8,
 
-    // Vaxis components
     vx: vaxis.Vaxis,
     tty: vaxis.Tty,
 
@@ -83,8 +83,6 @@ pub const TuiClient = struct {
     }
 
     pub fn deinit(self: *TuiClient) void {
-        // Stop receiver thread by closing the socket first
-        // This will cause the blocking read to fail and the thread to exit
         self.running = false;
         posix.close(self.socket);
 
@@ -92,13 +90,11 @@ pub const TuiClient = struct {
             thread.join();
         }
 
-        // Clean up messages
         for (self.messages.items) |*msg| {
             msg.destroy();
         }
         self.messages.deinit(self.allocator);
 
-        // Clean up pending messages
         self.message_mutex.lock();
         for (self.pending_messages.items) |msg| {
             self.allocator.free(msg);
@@ -127,14 +123,11 @@ pub const TuiClient = struct {
 
         try self.vx.queryTerminal(self.tty.writer(), 1 * std.time.ns_per_s);
 
-        // Start receiver thread
         self.receiver_thread = try std.Thread.spawn(.{}, receiveMessages, .{self});
 
-        // Add welcome message
         try self.addMessage("[System] Welcome to Zignal Chat! Type your message and press Enter to send. Press Ctrl+C to exit.");
 
         while (self.running) {
-            // Process any pending messages from receiver thread
             self.processPendingMessages();
 
             // Poll for events with timeout
@@ -224,13 +217,11 @@ pub const TuiClient = struct {
             win.writeCell(col, 0, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = title_style });
         }
 
-        // Write title text
-        const title_text = " ⚡ ZIGNAL ";
+        const title_text = "ZIGNAL ";
         const title_start: u16 = if (width > title_text.len) @intCast((width - title_text.len) / 2) else 0;
         const title_segment = [_]Cell.Segment{.{ .text = title_text, .style = title_style }};
         _ = win.print(&title_segment, .{ .col_offset = title_start });
 
-        // Connection status indicator (right side of title bar)
         const status_indicator = if (self.connected) " ● Connected " else " ○ Disconnected ";
         const status_indicator_style: Cell.Style = .{
             .fg = if (self.connected) colors.connected else colors.disconnected,
@@ -347,7 +338,6 @@ pub const TuiClient = struct {
             const data = display_data[i];
             const msg = &messages[data.idx];
 
-            // Get timestamp
             var timestamp_buf: [8]u8 = undefined;
             const timestamp = msg.getTimestampStr(&timestamp_buf);
 
@@ -413,14 +403,12 @@ pub const TuiClient = struct {
     }
 
     fn sendMessage(self: *TuiClient) !void {
-        // Get message from text input buffer (gap buffer: first half + second half)
         const first_half = self.text_input.buf.firstHalf();
         const second_half = self.text_input.buf.secondHalf();
         const message_len = first_half.len + second_half.len;
 
         if (message_len == 0) return;
 
-        // Combine the two halves into a temporary buffer
         var message_buf: [BUFFER_SIZE]u8 = undefined;
         if (message_len > BUFFER_SIZE) return; // Message too long
 
@@ -428,29 +416,25 @@ pub const TuiClient = struct {
         @memcpy(message_buf[first_half.len..message_len], second_half);
         const message = message_buf[0..message_len];
 
-        // Check for commands (use / prefix instead of \ to avoid escape issues)
-        if (std.mem.eql(u8, message, "/exit")) {
+        if (Command.parse(message)) |cmd| {
             self.text_input.buf.clearRetainingCapacity();
-            self.running = false;
-            return;
-        }
-
-        if (std.mem.eql(u8, message, "/clear")) {
-            for (self.messages.items) |*msg| {
-                msg.destroy();
+            switch (cmd) {
+                .exit => {
+                    self.running = false;
+                },
+                .clear => {
+                    for (self.messages.items) |*msg| {
+                        msg.destroy();
+                    }
+                    self.messages.clearRetainingCapacity();
+                },
+                .help => {
+                    try self.addMessage(Command.helpText());
+                },
             }
-            self.messages.clearRetainingCapacity();
-            self.text_input.buf.clearRetainingCapacity();
             return;
         }
 
-        if (std.mem.eql(u8, message, "/help")) {
-            self.text_input.buf.clearRetainingCapacity();
-            try self.addMessage("[Help] Commands: /exit, /clear, /help");
-            return;
-        }
-
-        // Format message
         var formatted_message: [BUFFER_SIZE]u8 = undefined;
         const display_username = if (self.username.len > 0) self.username else "Anonymous";
 
@@ -461,10 +445,8 @@ pub const TuiClient = struct {
             return;
         };
 
-        // Add message to local display (echo own message)
         try self.addMessage(formatted);
 
-        // Send to server
         const writer = Writer.init(self.socket);
         writer.writeMessage(formatted) catch |err| {
             var err_buf: [64]u8 = undefined;
@@ -473,7 +455,6 @@ pub const TuiClient = struct {
             return;
         };
 
-        // Clear input
         self.text_input.buf.clearRetainingCapacity();
     }
 

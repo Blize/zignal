@@ -4,6 +4,28 @@ const TuiClient = @import("tui.zig").TuiClient;
 const utils = @import("../utils.zig");
 
 // ============================================================================
+// Commands
+// ============================================================================
+
+/// Client commands that can be entered in chat
+pub const Command = enum {
+    exit,
+    clear,
+    help,
+
+    pub fn parse(message: []const u8) ?Command {
+        if (std.mem.eql(u8, message, "/exit")) return .exit;
+        if (std.mem.eql(u8, message, "/clear")) return .clear;
+        if (std.mem.eql(u8, message, "/help")) return .help;
+        return null;
+    }
+
+    pub fn helpText() []const u8 {
+        return "[Help] Commands: /exit, /clear, /help";
+    }
+};
+
+// ============================================================================
 // Chat Message
 // ============================================================================
 
