@@ -6,11 +6,39 @@ const Allocator = std.mem.Allocator;
 const config = @import("../config.zig");
 const Reader = @import("../reader.zig").Reader;
 const Writer = @import("../writer.zig").Writer;
+const ServerTui = @import("tui.zig").ServerTui;
+const LogEntry = @import("tui.zig").LogEntry;
 
 const BUFFER_SIZE = config.BUFFER_SIZE;
 const MAX_CLIENTS = config.MAX_CLIENTS;
 
-const log = std.log.scoped(.server);
+// Buffer for local IP (static so it persists)
+var local_ip_buf: [16]u8 = undefined;
+
+/// Get the local network IP address by creating a UDP socket
+/// and checking what source address would be used to reach 8.8.8.8
+fn getLocalIp() ?[]const u8 {
+    // Create a UDP socket (doesn't actually send anything)
+    const sock = posix.socket(posix.AF.INET, posix.SOCK.DGRAM, 0) catch return null;
+    defer posix.close(sock);
+
+    // "Connect" to Google DNS - this doesn't send data, just sets the route
+    const dest = net.Address.parseIp4("8.8.8.8", 53) catch return null;
+    posix.connect(sock, &dest.any, dest.getOsSockLen()) catch return null;
+
+    // Get the local address that would be used
+    var local_addr: net.Address = undefined;
+    var addr_len: posix.socklen_t = @sizeOf(net.Address);
+    posix.getsockname(sock, &local_addr.any, &addr_len) catch return null;
+
+    // Format the IP address
+    const bytes = @as(*const [4]u8, @ptrCast(&local_addr.in.sa.addr));
+    const len = std.fmt.bufPrint(&local_ip_buf, "{}.{}.{}.{}", .{
+        bytes[0], bytes[1], bytes[2], bytes[3],
+    }) catch return null;
+
+    return local_ip_buf[0..len.len];
+}
 
 /// Client represents a connected client with its socket and reader state
 const ClientConnection = struct {
@@ -53,6 +81,19 @@ pub const Server = struct {
     // Number of currently connected clients
     connected: usize,
 
+    // Running state (shared with TUI)
+    running: bool,
+
+    // TUI reference for logging
+    tui: ?*ServerTui,
+
+    // Actual bound port (may differ from requested if 0 was used)
+    bound_port: u16,
+
+    // Local IP address for display
+    local_ip: [16]u8,
+    local_ip_len: usize,
+
     pub fn init(allocator: Allocator, address: net.Address, max_clients: ?usize) !Server {
         const actual_max = max_clients orelse MAX_CLIENTS;
 
@@ -63,6 +104,18 @@ pub const Server = struct {
         const clients = try allocator.alloc(ClientConnection, actual_max);
         errdefer allocator.free(clients);
 
+        // Get local IP
+        var local_ip: [16]u8 = undefined;
+        var local_ip_len: usize = 0;
+        if (getLocalIp()) |ip| {
+            @memcpy(local_ip[0..ip.len], ip);
+            local_ip_len = ip.len;
+        } else {
+            const fallback = "127.0.0.1";
+            @memcpy(local_ip[0..fallback.len], fallback);
+            local_ip_len = fallback.len;
+        }
+
         return .{
             .allocator = allocator,
             .address = address,
@@ -71,12 +124,25 @@ pub const Server = struct {
             .clients = clients,
             .client_polls = polls[1..],
             .connected = 0,
+            .running = true,
+            .tui = null,
+            .bound_port = 0,
+            .local_ip = local_ip,
+            .local_ip_len = local_ip_len,
         };
     }
 
     pub fn deinit(self: *Server) void {
         self.allocator.free(self.polls);
         self.allocator.free(self.clients);
+    }
+
+    fn log(self: *Server, comptime fmt: []const u8, args: anytype, level: LogEntry.Level) void {
+        var buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+        if (self.tui) |tui| {
+            tui.queueLog(msg, level);
+        }
     }
 
     pub fn start(self: *Server) !void {
@@ -93,7 +159,23 @@ pub const Server = struct {
         var addr_len: posix.socklen_t = @sizeOf(net.Address);
         try posix.getsockname(listener, &addr.any, &addr_len);
 
-        log.info("Listening on port: {}", .{addr.getPort()});
+        self.bound_port = addr.getPort();
+        self.log("Listening on port: {}", .{self.bound_port}, .info);
+
+        // Start TUI in separate thread
+        const tui = try ServerTui.init(
+            self.allocator,
+            self.local_ip[0..self.local_ip_len],
+            &self.bound_port,
+            &self.connected,
+            self.max_clients,
+            &self.running,
+        );
+        defer tui.deinit();
+        self.tui = tui;
+
+        // Start TUI thread
+        const tui_thread = try std.Thread.spawn(.{}, runTui, .{tui});
 
         // Setup the listening socket in polls[0]
         self.polls[0] = .{
@@ -102,14 +184,17 @@ pub const Server = struct {
             .events = posix.POLL.IN,
         };
 
-        while (true) {
-            // Poll all connected clients + the listening socket
-            _ = try posix.poll(self.polls[0 .. self.connected + 1], -1);
+        while (self.running) {
+            // Poll with timeout so we can check running state
+            _ = posix.poll(self.polls[0 .. self.connected + 1], 100) catch |err| {
+                self.log("Poll error: {}", .{err}, .err);
+                continue;
+            };
 
             // Check if the listening socket is ready to accept
             if (self.polls[0].revents != 0) {
                 self.acceptClients(listener) catch |err| {
-                    log.err("Failed to accept clients: {}", .{err});
+                    self.log("Failed to accept clients: {}", .{err}, .err);
                 };
             }
 
@@ -118,7 +203,6 @@ pub const Server = struct {
             while (i < self.connected) {
                 const revents = self.client_polls[i].revents;
                 if (revents == 0) {
-                    // This socket is not ready
                     i += 1;
                     continue;
                 }
@@ -127,7 +211,7 @@ pub const Server = struct {
 
                 // Check for errors or disconnection
                 if (revents & posix.POLL.HUP == posix.POLL.HUP) {
-                    log.info("Client disconnected", .{});
+                    self.log("Client disconnected", .{}, .info);
                     self.removeClient(i);
                     continue;
                 }
@@ -136,19 +220,18 @@ pub const Server = struct {
                 if (revents & posix.POLL.IN == posix.POLL.IN) {
                     while (true) {
                         const msg = client.readMessage() catch |err| {
-                            log.err("Error reading from client: {}", .{err});
+                            self.log("Error reading from client: {}", .{err}, .err);
                             self.removeClient(i);
                             break;
                         } orelse {
-                            // No more complete messages available for this client
                             i += 1;
                             break;
                         };
 
-                        log.info("Received message: {s}", .{msg});
+                        self.log("Message: {s}", .{msg}, .info);
 
                         // Broadcast to all other clients
-                        const sockets = try self.allocator.alloc(posix.socket_t, self.connected);
+                        const sockets = self.allocator.alloc(posix.socket_t, self.connected) catch continue;
                         defer self.allocator.free(sockets);
                         for (0..self.connected) |j| {
                             sockets[j] = self.clients[j].socket;
@@ -158,6 +241,13 @@ pub const Server = struct {
                 }
             }
         }
+
+        self.log("Server shutting down...", .{}, .info);
+        tui_thread.join();
+    }
+
+    fn runTui(tui: *ServerTui) void {
+        tui.run() catch {};
     }
 
     /// Accept all pending connections and add them to the client list
@@ -172,13 +262,13 @@ pub const Server = struct {
             };
 
             if (self.connected >= self.max_clients) {
-                log.warn("Max clients reached, rejecting new connection", .{});
+                self.log("Max clients reached, rejecting connection", .{}, .warn);
                 posix.close(socket);
                 continue;
             }
 
             const client = ClientConnection.init(self.allocator, socket, client_address) catch |err| {
-                log.err("Failed to initialize client: {}", .{err});
+                self.log("Failed to initialize client: {}", .{err}, .err);
                 posix.close(socket);
                 continue;
             };
@@ -192,12 +282,12 @@ pub const Server = struct {
             };
             self.connected += 1;
 
-            log.info("Client connected. Total connections: {}", .{self.connected});
+            self.log("Client connected (total: {})", .{self.connected}, .info);
 
             // Send welcome message
             const welcome = "[Server] Thanks for joining!";
             Writer.writeToSocket(socket, welcome) catch |err| {
-                log.warn("Failed to send welcome message: {}", .{err});
+                self.log("Failed to send welcome: {}", .{err}, .warn);
             };
         }
     }
@@ -216,6 +306,6 @@ pub const Server = struct {
         }
 
         self.connected = last_idx;
-        log.info("Client removed. Total connections: {}", .{self.connected});
+        self.log("Client removed (total: {})", .{self.connected}, .info);
     }
 };
