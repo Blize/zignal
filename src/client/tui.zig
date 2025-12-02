@@ -1,0 +1,512 @@
+const std = @import("std");
+const vaxis = @import("vaxis");
+const posix = std.posix;
+
+const config = @import("../config.zig");
+const Writer = @import("../writer.zig").Writer;
+const Reader = @import("../reader.zig").Reader;
+
+const BUFFER_SIZE = config.BUFFER_SIZE;
+
+const Cell = vaxis.Cell;
+const Key = vaxis.Key;
+const Window = vaxis.Window;
+const TextInput = vaxis.widgets.TextInput;
+
+/// Event types for our TUI application
+const Event = union(enum) {
+    key_press: Key,
+    winsize: vaxis.Winsize,
+    focus_in,
+    focus_out,
+    mouse: vaxis.Mouse,
+};
+
+/// Chat message structure
+const ChatMessage = struct {
+    content: []const u8,
+    allocator: std.mem.Allocator,
+
+    fn create(allocator: std.mem.Allocator, content: []const u8) !ChatMessage {
+        const owned = try allocator.dupe(u8, content);
+        return .{
+            .content = owned,
+            .allocator = allocator,
+        };
+    }
+
+    fn destroy(self: *ChatMessage) void {
+        self.allocator.free(self.content);
+    }
+};
+
+/// TUI Client for the chat application
+pub const TuiClient = struct {
+    allocator: std.mem.Allocator,
+    socket: posix.socket_t,
+    username: []const u8,
+
+    // Vaxis components
+    vx: vaxis.Vaxis,
+    tty: vaxis.Tty,
+
+    // Chat state
+    messages: std.ArrayList(ChatMessage),
+    text_input: TextInput,
+    scroll_offset: usize,
+
+    // Running state
+    running: bool,
+
+    // Receiver thread
+    receiver_thread: ?std.Thread,
+
+    // Thread-safe message queue
+    pending_messages: std.ArrayList([]const u8),
+    message_mutex: std.Thread.Mutex,
+
+    pub fn init(allocator: std.mem.Allocator, socket: posix.socket_t, username: []const u8) !*TuiClient {
+        const self = try allocator.create(TuiClient);
+        errdefer allocator.destroy(self);
+
+        var tty_buf: [1024]u8 = undefined;
+        var tty = try vaxis.Tty.init(&tty_buf);
+        errdefer tty.deinit();
+
+        var vx = try vaxis.Vaxis.init(allocator, .{});
+        errdefer vx.deinit(allocator, tty.writer());
+
+        self.* = .{
+            .allocator = allocator,
+            .socket = socket,
+            .username = username,
+            .vx = vx,
+            .tty = tty,
+            .messages = .{ .items = &.{}, .capacity = 0 },
+            .text_input = TextInput.init(allocator),
+            .scroll_offset = 0,
+            .running = true,
+            .receiver_thread = null,
+            .pending_messages = .{ .items = &.{}, .capacity = 0 },
+            .message_mutex = .{},
+        };
+
+        return self;
+    }
+
+    pub fn deinit(self: *TuiClient) void {
+        // Stop receiver thread by closing the socket first
+        // This will cause the blocking read to fail and the thread to exit
+        self.running = false;
+        posix.close(self.socket);
+        
+        if (self.receiver_thread) |thread| {
+            thread.join();
+        }
+
+        // Clean up messages
+        for (self.messages.items) |*msg| {
+            msg.destroy();
+        }
+        self.messages.deinit(self.allocator);
+
+        // Clean up pending messages
+        self.message_mutex.lock();
+        for (self.pending_messages.items) |msg| {
+            self.allocator.free(msg);
+        }
+        self.pending_messages.deinit(self.allocator);
+        self.message_mutex.unlock();
+
+        self.text_input.deinit();
+        self.vx.deinit(self.allocator, self.tty.writer());
+        self.tty.deinit();
+
+        self.allocator.destroy(self);
+    }
+
+    pub fn run(self: *TuiClient) !void {
+        var loop: vaxis.Loop(Event) = .{
+            .tty = &self.tty,
+            .vaxis = &self.vx,
+        };
+        try loop.init();
+
+        try loop.start();
+        defer loop.stop();
+
+        try self.vx.enterAltScreen(self.tty.writer());
+        try self.vx.queryTerminal(self.tty.writer(), 1 * std.time.ns_per_s);
+
+        // Start receiver thread
+        self.receiver_thread = try std.Thread.spawn(.{}, receiveMessages, .{self});
+
+        // Add welcome message
+        try self.addMessage("[System] Welcome to Zignal Chat! Type your message and press Enter to send. Press Ctrl+C to exit.");
+
+        while (self.running) {
+            // Process any pending messages from receiver thread
+            self.processPendingMessages();
+
+            // Poll for events with timeout
+            while (loop.tryEvent()) |event| {
+                try self.handleEvent(event);
+            }
+
+            try self.render();
+
+            // Small sleep to prevent busy loop
+            std.Thread.sleep(16 * std.time.ns_per_ms); // ~60fps
+        }
+    }
+
+    fn handleEvent(self: *TuiClient, event: Event) !void {
+        switch (event) {
+            .key_press => |key| {
+                if (key.matches('c', .{ .ctrl = true })) {
+                    self.running = false;
+                    return;
+                }
+
+                if (key.matches('l', .{ .ctrl = true })) {
+                    self.vx.queueRefresh();
+                    return;
+                }
+
+                // Handle Enter key - send message
+                if (key.matches(Key.enter, .{})) {
+                    try self.sendMessage();
+                    return;
+                }
+
+                // Handle scroll
+                if (key.matches(Key.page_up, .{})) {
+                    if (self.scroll_offset < self.messages.items.len) {
+                        self.scroll_offset += 5;
+                    }
+                    return;
+                }
+
+                if (key.matches(Key.page_down, .{})) {
+                    if (self.scroll_offset >= 5) {
+                        self.scroll_offset -= 5;
+                    } else {
+                        self.scroll_offset = 0;
+                    }
+                    return;
+                }
+
+                // Pass to text input widget
+                try self.text_input.update(.{ .key_press = key });
+            },
+            .winsize => |ws| {
+                try self.vx.resize(self.allocator, self.tty.writer(), ws);
+            },
+            else => {},
+        }
+    }
+
+    fn render(self: *TuiClient) !void {
+        const win = self.vx.window();
+        win.clear();
+
+        const width = win.width;
+        const height = win.height;
+
+        if (height < 5 or width < 20) {
+            return; // Terminal too small
+        }
+
+        // Draw title bar
+        const title_style: Cell.Style = .{
+            .fg = .{ .index = 15 }, // White
+            .bg = .{ .index = 4 }, // Blue
+            .bold = true,
+        };
+
+        // Fill title row
+        var col: u16 = 0;
+        while (col < width) : (col += 1) {
+            win.writeCell(col, 0, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = title_style });
+        }
+
+        // Write title text using print for proper grapheme handling
+        const title_text = "zignal";
+
+        const title_start: u16 = if (width > title_text.len) @intCast((width - title_text.len) / 2) else 0;
+        const title_segment = [_]Cell.Segment{.{ .text = title_text, .style = title_style }};
+        _ = win.print(&title_segment, .{ .col_offset = title_start });
+
+        // Draw chat area (height - 4 for title, separator, input box, and status)
+        const chat_height: u16 = @intCast(@max(1, height - 10));
+        const chat_area = win.child(.{
+            .x_off = 1,
+            .y_off = 1,
+            .width = width - 2,
+            .height = chat_height,
+        });
+
+        // Render messages
+        self.renderMessages(chat_area, chat_height);
+
+        // Draw separator line
+        const separator_style: Cell.Style = .{
+            .fg = .{ .index = 8 }, // Gray
+        };
+        const sep_row: u16 = @intCast(height - 3);
+        col = 0;
+        while (col < width) : (col += 1) {
+            win.writeCell(col, sep_row, .{
+                .char = .{ .grapheme = "─", .width = 1 },
+                .style = separator_style,
+            });
+        }
+
+        // Draw input prompt
+        const prompt_style: Cell.Style = .{
+            .fg = .{ .index = 2 }, // Green
+            .bold = true,
+        };
+        const input_row: u16 = @intCast(height - 2);
+        win.writeCell(0, input_row, .{
+            .char = .{ .grapheme = ">", .width = 1 },
+            .style = prompt_style,
+        });
+        win.writeCell(1, input_row, .{
+            .char = .{ .grapheme = " ", .width = 1 },
+            .style = prompt_style,
+        });
+
+        // Draw text input
+        const input_area = win.child(.{
+            .x_off = 2,
+            .y_off = @intCast(height - 2),
+            .width = width - 3,
+            .height = 1,
+        });
+        self.text_input.draw(input_area);
+
+        // Draw status bar
+        const status_style: Cell.Style = .{
+            .fg = .{ .index = 8 }, // Gray
+        };
+        const status_row: u16 = @intCast(height - 1);
+
+        var status_buf: [128]u8 = undefined;
+        const status_text = std.fmt.bufPrint(&status_buf, " User: {s} | /help | Ctrl+C: Exit | PgUp/PgDn: Scroll ", .{
+            if (self.username.len > 0) self.username else "Anonymous",
+        }) catch " Ctrl+C: Exit ";
+
+        for (status_text, 0..) |char, i| {
+            if (i >= width) break;
+            win.writeCell(@intCast(i), status_row, .{
+                .char = .{ .grapheme = &[_]u8{char}, .width = 1 },
+                .style = status_style,
+            });
+        }
+
+        try self.vx.render(self.tty.writer());
+    }
+
+    fn renderMessages(self: *TuiClient, area: Window, max_lines: u16) void {
+        const messages = self.messages.items;
+        if (messages.len == 0) return;
+
+        // Calculate how many messages we can show
+        var lines_used: usize = 0;
+        var msg_index = messages.len;
+
+        // Skip messages based on scroll offset
+        var scroll_remaining = self.scroll_offset;
+        while (scroll_remaining > 0 and msg_index > 0) {
+            msg_index -= 1;
+            scroll_remaining -= 1;
+        }
+
+        // Collect messages to display
+        var display_indices: [256]usize = undefined;
+        var display_count: usize = 0;
+
+        var temp_idx = msg_index;
+        while (temp_idx > 0 and lines_used < max_lines) {
+            temp_idx -= 1;
+            if (display_count < display_indices.len) {
+                display_indices[display_count] = temp_idx;
+                display_count += 1;
+            }
+            lines_used += 1;
+        }
+
+        // Render from top to bottom (reverse order)
+        var row: u16 = @intCast(@max(0, @as(i32, max_lines) - @as(i32, @intCast(lines_used))));
+        var i = display_count;
+        while (i > 0) {
+            i -= 1;
+            const msg = messages[display_indices[i]];
+
+            // Determine message style based on content
+            var style: Cell.Style = .{ .fg = .{ .index = 15 } }; // Default white
+
+            if (std.mem.startsWith(u8, msg.content, "[System]")) {
+                style = .{ .fg = .{ .index = 3 }, .italic = true }; // Yellow for system
+            } else if (std.mem.startsWith(u8, msg.content, "[Server]")) {
+                style = .{ .fg = .{ .index = 6 }, .bold = true }; // Cyan for server
+            } else if (std.mem.indexOf(u8, msg.content, ": ")) |colon_pos| {
+                // Render username in different color, message in white
+                const username_part = msg.content[0 .. colon_pos + 2]; // Include ": "
+                const message_part = msg.content[colon_pos + 2 ..];
+
+                // Username style
+                const username_style: Cell.Style = .{
+                    .fg = .{ .index = 5 }, // Magenta
+                    .bold = true,
+                };
+
+                const segments = [_]Cell.Segment{
+                    .{ .text = username_part, .style = username_style },
+                    .{ .text = message_part, .style = style },
+                };
+
+                _ = area.print(&segments, .{ .row_offset = row });
+                row += 1;
+                continue;
+            }
+
+            // Regular message rendering using print
+            const segments = [_]Cell.Segment{
+                .{ .text = msg.content, .style = style },
+            };
+            _ = area.print(&segments, .{ .row_offset = row });
+
+            row += 1;
+        }
+    }
+
+    fn sendMessage(self: *TuiClient) !void {
+        // Get message from text input buffer (gap buffer: first half + second half)
+        const first_half = self.text_input.buf.firstHalf();
+        const second_half = self.text_input.buf.secondHalf();
+        const message_len = first_half.len + second_half.len;
+        
+        if (message_len == 0) return;
+
+        // Combine the two halves into a temporary buffer
+        var message_buf: [BUFFER_SIZE]u8 = undefined;
+        if (message_len > BUFFER_SIZE) return; // Message too long
+        
+        @memcpy(message_buf[0..first_half.len], first_half);
+        @memcpy(message_buf[first_half.len..message_len], second_half);
+        const message = message_buf[0..message_len];
+
+        // Check for commands (use / prefix instead of \ to avoid escape issues)
+        if (std.mem.eql(u8, message, "/exit")) {
+            self.text_input.buf.clearRetainingCapacity();
+            self.running = false;
+            return;
+        }
+
+        if (std.mem.eql(u8, message, "/clear")) {
+            for (self.messages.items) |*msg| {
+                msg.destroy();
+            }
+            self.messages.clearRetainingCapacity();
+            self.text_input.buf.clearRetainingCapacity();
+            return;
+        }
+
+        if (std.mem.eql(u8, message, "/help")) {
+            self.text_input.buf.clearRetainingCapacity();
+            try self.addMessage("[Help] Commands: /exit, /clear, /help");
+            return;
+        }
+
+        // Format message
+        var formatted_message: [BUFFER_SIZE]u8 = undefined;
+        const display_username = if (self.username.len > 0) self.username else "Anonymous";
+
+        const formatted = std.fmt.bufPrint(&formatted_message, "{s}: {s}", .{
+            display_username,
+            message,
+        }) catch {
+            return;
+        };
+
+        // Add message to local display (echo own message)
+        try self.addMessage(formatted);
+
+        // Send to server
+        const writer = Writer.init(self.socket);
+        writer.writeMessage(formatted) catch |err| {
+            var err_buf: [64]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "[System] Failed to send message: {}", .{err}) catch "[System] Failed to send message";
+            try self.addMessage(err_msg);
+            return;
+        };
+
+        // Clear input
+        self.text_input.buf.clearRetainingCapacity();
+    }
+
+    fn addMessage(self: *TuiClient, content: []const u8) !void {
+        const msg = try ChatMessage.create(self.allocator, content);
+        try self.messages.append(self.allocator, msg);
+
+        // Auto-scroll to bottom when new message arrives
+        self.scroll_offset = 0;
+    }
+
+    fn processPendingMessages(self: *TuiClient) void {
+        self.message_mutex.lock();
+        defer self.message_mutex.unlock();
+
+        for (self.pending_messages.items) |msg| {
+            self.addMessage(msg) catch {};
+            self.allocator.free(msg);
+        }
+        self.pending_messages.clearRetainingCapacity();
+    }
+
+    fn receiveMessages(self: *TuiClient) void {
+        var message_buffer: [BUFFER_SIZE]u8 = undefined;
+
+        while (self.running) {
+            const message = Reader.readClientMessage(self.socket, &message_buffer) catch |err| {
+                if (self.running) {
+                    var err_buf: [64]u8 = undefined;
+                    const err_msg = std.fmt.bufPrint(&err_buf, "[System] Connection error: {}", .{err}) catch "[System] Connection error";
+                    const owned = self.allocator.dupe(u8, err_msg) catch continue;
+
+                    self.message_mutex.lock();
+                    self.pending_messages.append(self.allocator, owned) catch {
+                        self.allocator.free(owned);
+                    };
+                    self.message_mutex.unlock();
+
+                    self.running = false;
+                }
+                break;
+            };
+
+            if (message == null) {
+                const owned = self.allocator.dupe(u8, "[System] Disconnected from server") catch continue;
+
+                self.message_mutex.lock();
+                self.pending_messages.append(self.allocator, owned) catch {
+                    self.allocator.free(owned);
+                };
+                self.message_mutex.unlock();
+
+                self.running = false;
+                break;
+            }
+
+            const owned = self.allocator.dupe(u8, message.?) catch continue;
+
+            self.message_mutex.lock();
+            self.pending_messages.append(self.allocator, owned) catch {
+                self.allocator.free(owned);
+            };
+            self.message_mutex.unlock();
+        }
+    }
+};

@@ -1,41 +1,86 @@
 const std = @import("std");
 const net = std.net;
 const posix = std.posix;
-const Allocator = @import("std").mem.Allocator;
+const Allocator = std.mem.Allocator;
 
 const config = @import("../config.zig");
-const Client = @import("../client/client.zig").Client;
+const Reader = @import("../reader.zig").Reader;
+const Writer = @import("../writer.zig").Writer;
 
 const BUFFER_SIZE = config.BUFFER_SIZE;
 const MAX_CLIENTS = config.MAX_CLIENTS;
 
-pub const Server = struct {
-    allocator: *Allocator,
-    address: net.Address,
-    maxClients: usize,
-    messageBuffer: *[BUFFER_SIZE]u8,
-    socket: ?posix.socket_t,
+const log = std.log.scoped(.server);
 
-    clients: std.ArrayList(posix.socket_t),
-    clientsMutex: std.Thread.Mutex,
+/// Client represents a connected client with its socket and reader state
+const ClientConnection = struct {
+    reader: Reader,
+    socket: posix.socket_t,
+    address: std.net.Address,
 
-    pub fn init(allocator: *Allocator, address: net.Address, maxClients: ?usize, messageBuffer: *[BUFFER_SIZE]u8) Server {
-        return Server{
-            .allocator = allocator,
+    fn init(allocator: Allocator, socket: posix.socket_t, address: std.net.Address) !ClientConnection {
+        const reader = try Reader.init(allocator, BUFFER_SIZE);
+        return .{
+            .reader = reader,
+            .socket = socket,
             .address = address,
-            .maxClients = maxClients orelse MAX_CLIENTS,
-            .messageBuffer = messageBuffer,
-            .socket = null,
-            .clients = .empty,
-            .clientsMutex = std.Thread.Mutex{},
         };
     }
 
-    pub fn start(self: *Server) !void {
-        var pool: std.Thread.Pool = undefined;
-        try std.Thread.Pool.init(&pool, .{ .allocator = self.allocator.*, .n_jobs = self.maxClients });
+    fn deinit(self: *ClientConnection, allocator: Allocator) void {
+        self.reader.deinit(allocator);
+    }
 
-        const tpe: u32 = posix.SOCK.STREAM;
+    fn readMessage(self: *ClientConnection) !?[]const u8 {
+        return self.reader.readMessage(self.socket);
+    }
+};
+
+pub const Server = struct {
+    allocator: Allocator,
+    address: net.Address,
+    max_clients: usize,
+
+    // Poll file descriptors: [0] is listening socket, [1..] are client sockets
+    polls: []posix.pollfd,
+
+    // Client connections: only [0..connected] are valid
+    clients: []ClientConnection,
+
+    // Slice of polls starting from index 1, for easier management
+    client_polls: []posix.pollfd,
+
+    // Number of currently connected clients
+    connected: usize,
+
+    pub fn init(allocator: Allocator, address: net.Address, max_clients: ?usize) !Server {
+        const actual_max = max_clients orelse MAX_CLIENTS;
+
+        // +1 for the listening socket
+        const polls = try allocator.alloc(posix.pollfd, actual_max + 1);
+        errdefer allocator.free(polls);
+
+        const clients = try allocator.alloc(ClientConnection, actual_max);
+        errdefer allocator.free(clients);
+
+        return .{
+            .allocator = allocator,
+            .address = address,
+            .max_clients = actual_max,
+            .polls = polls,
+            .clients = clients,
+            .client_polls = polls[1..],
+            .connected = 0,
+        };
+    }
+
+    pub fn deinit(self: *Server) void {
+        self.allocator.free(self.polls);
+        self.allocator.free(self.clients);
+    }
+
+    pub fn start(self: *Server) !void {
+        const tpe: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
         const protocol = posix.IPPROTO.TCP;
         const listener = try posix.socket(self.address.any.family, tpe, protocol);
         defer posix.close(listener);
@@ -48,139 +93,129 @@ pub const Server = struct {
         var addr_len: posix.socklen_t = @sizeOf(net.Address);
         try posix.getsockname(listener, &addr.any, &addr_len);
 
-        std.log.info("[Server]: Listening on port: {}", .{addr.getPort()});
+        log.info("Listening on port: {}", .{addr.getPort()});
 
-        while (true) {
-            var clientAddress: net.Address = undefined;
-            var clientAddressLen: posix.socklen_t = @sizeOf(net.Address);
-            const socket = posix.accept(listener, &clientAddress.any, &clientAddressLen, 0) catch |err| {
-                std.log.err("[Server]: Failed to accpept new client: {}", .{err});
-                continue;
-            };
-
-            self.clientsMutex.lock();
-            self.clients.append(self.allocator.*, socket) catch {
-                self.clientsMutex.unlock();
-                std.log.err("[Server]: Failed to add client to list", .{});
-                _ = posix.close(socket);
-                continue;
-            };
-            self.clientsMutex.unlock();
-
-            const rand = std.crypto.random;
-            const client = Client{
-                .socket = socket,
-                .address = clientAddress,
-                .id = rand.int(u32),
-                .username = undefined,
-                .username_len = 0,
-                .buffer = undefined,
-            };
-
-            try pool.spawn(Server.handleClient, .{ self, client });
-        }
-    }
-
-    fn handleClient(self: *Server, client: Client) void {
-        std.log.info("[Server]: Client {} connected with id {}", .{ client.socket, client.id });
-
-        const welcome = "[Server] |Thanks for joining| [Server]";
-        Server.sendMessage(client.socket, welcome) catch |err| {
-            std.log.err("[Server]: Problem sending init mesage: {}", .{err});
+        // Setup the listening socket in polls[0]
+        self.polls[0] = .{
+            .fd = listener,
+            .revents = 0,
+            .events = posix.POLL.IN,
         };
 
         while (true) {
-            var lenBuf: [4]u8 = undefined;
-            const lenRead = posix.read(client.socket, &lenBuf) catch |err| {
-                std.log.warn("[Server]: Failed to read length: {}", .{err});
-                break;
-            };
-            if (lenRead == 0) {
-                std.log.info("[Server]: Client {} disconnected", .{client.id});
-                break;
-            }
-            if (lenRead != 4) {
-                std.log.warn("[Server]: Partial length read from client {}: {} bytes", .{ client.id, lenRead });
-                break;
-            }
+            // Poll all connected clients + the listening socket
+            _ = try posix.poll(self.polls[0 .. self.connected + 1], -1);
 
-            const msgLen = std.mem.readInt(u32, &lenBuf, .little);
-            if (msgLen > BUFFER_SIZE) {
-                std.log.err("[Server]: Client {} sent too large message: {}", .{ client.id, msgLen });
-                break;
-            }
-
-            var message: [BUFFER_SIZE]u8 = undefined;
-            var totalRead: usize = 0;
-            while (totalRead < msgLen) {
-                const chunk = posix.read(client.socket, message[totalRead..msgLen]) catch |err| {
-                    std.log.warn("[Server]: Error reading message from client {}: {}", .{ client.id, err });
-                    break;
+            // Check if the listening socket is ready to accept
+            if (self.polls[0].revents != 0) {
+                self.acceptClients(listener) catch |err| {
+                    log.err("Failed to accept clients: {}", .{err});
                 };
-                if (chunk == 0) {
-                    std.log.info("[Server]: Client {} disconnected mid-message", .{client.id});
-                    break;
+            }
+
+            // Process ready client sockets
+            var i: usize = 0;
+            while (i < self.connected) {
+                const revents = self.client_polls[i].revents;
+                if (revents == 0) {
+                    // This socket is not ready
+                    i += 1;
+                    continue;
                 }
-                totalRead += chunk;
+
+                var client = &self.clients[i];
+
+                // Check for errors or disconnection
+                if (revents & posix.POLL.HUP == posix.POLL.HUP) {
+                    log.info("Client disconnected", .{});
+                    self.removeClient(i);
+                    continue;
+                }
+
+                // Read available data
+                if (revents & posix.POLL.IN == posix.POLL.IN) {
+                    while (true) {
+                        const msg = client.readMessage() catch |err| {
+                            log.err("Error reading from client: {}", .{err});
+                            self.removeClient(i);
+                            break;
+                        } orelse {
+                            // No more complete messages available for this client
+                            i += 1;
+                            break;
+                        };
+
+                        log.info("Received message: {s}", .{msg});
+
+                        // Broadcast to all other clients
+                        const sockets = try self.allocator.alloc(posix.socket_t, self.connected);
+                        defer self.allocator.free(sockets);
+                        for (0..self.connected) |j| {
+                            sockets[j] = self.clients[j].socket;
+                        }
+                        Writer.broadcastMessage(sockets, msg, client.socket);
+                    }
+                }
             }
-
-            if (totalRead != msgLen) {
-                std.log.warn("[Server]: Incomplete message from client {}", .{client.id});
-                break;
-            }
-
-            std.log.info("[Server]: Client {} has sent: {s}", .{ client.id, message[0..msgLen] });
-
-            self.broadcastMessage(client.socket, message[0..msgLen]);
         }
-
-        _ = posix.close(client.socket);
-
-        // Remove client from list
-        self.clientsMutex.lock();
-        var i: usize = 0;
-        while (i < self.clients.items.len) {
-            if (self.clients.items[i] == client.socket) {
-                _ = self.clients.swapRemove(i);
-                break;
-            }
-            i += 1;
-        }
-        self.clientsMutex.unlock();
     }
 
-    fn broadcastMessage(self: *Server, senderSocket: posix.socket_t, message: []const u8) void {
-        self.clientsMutex.lock();
-        defer self.clientsMutex.unlock();
+    /// Accept all pending connections and add them to the client list
+    fn acceptClients(self: *Server, listener: posix.socket_t) !void {
+        while (true) {
+            var client_address: net.Address = undefined;
+            var client_address_len: posix.socklen_t = @sizeOf(net.Address);
 
-        var lenBuf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &lenBuf, @intCast(message.len), .little);
-
-        for (self.clients.items) |socket| {
-            if (socket == senderSocket) continue;
-
-            const vec = [_]posix.iovec_const{
-                .{ .base = &lenBuf, .len = 4 },
-                .{ .base = message.ptr, .len = message.len },
+            const socket = posix.accept(listener, &client_address.any, &client_address_len, posix.SOCK.NONBLOCK) catch |err| switch (err) {
+                error.WouldBlock => return,
+                else => return err,
             };
 
-            const res = posix.writev(socket, &vec);
-            if (res) |_| {
-                std.log.info("[Server]: Broadcasted to client {}", .{socket});
-            } else |err| {
-                std.log.warn("[Server]: Failed to send to client {}: {}", .{ socket, err });
+            if (self.connected >= self.max_clients) {
+                log.warn("Max clients reached, rejecting new connection", .{});
+                posix.close(socket);
+                continue;
             }
+
+            const client = ClientConnection.init(self.allocator, socket, client_address) catch |err| {
+                log.err("Failed to initialize client: {}", .{err});
+                posix.close(socket);
+                continue;
+            };
+
+            const idx = self.connected;
+            self.clients[idx] = client;
+            self.client_polls[idx] = .{
+                .fd = socket,
+                .revents = 0,
+                .events = posix.POLL.IN,
+            };
+            self.connected += 1;
+
+            log.info("Client connected. Total connections: {}", .{self.connected});
+
+            // Send welcome message
+            const welcome = "[Server] Thanks for joining!";
+            Writer.writeToSocket(socket, welcome) catch |err| {
+                log.warn("Failed to send welcome message: {}", .{err});
+            };
         }
     }
-    fn sendMessage(socket: posix.socket_t, message: []const u8) !void {
-        var len_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_buf, @intCast(message.len), .little);
 
-        const vec = [_]posix.iovec_const{
-            .{ .base = &len_buf, .len = 4 },
-            .{ .base = message.ptr, .len = message.len },
-        };
+    /// Remove a client from the connected list
+    fn removeClient(self: *Server, idx: usize) void {
+        var client = self.clients[idx];
+        posix.close(client.socket);
+        client.deinit(self.allocator);
 
-        _ = try posix.writev(socket, &vec);
+        // Swap with the last client to maintain a compact array
+        const last_idx = self.connected - 1;
+        if (idx != last_idx) {
+            self.clients[idx] = self.clients[last_idx];
+            self.client_polls[idx] = self.client_polls[last_idx];
+        }
+
+        self.connected = last_idx;
+        log.info("Client removed. Total connections: {}", .{self.connected});
     }
 };

@@ -5,14 +5,23 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
+    // Add vaxis dependency
+    const vaxis = b.dependency("vaxis", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
+    // Add vaxis import to the module
+    exe_mod.addImport("vaxis", vaxis.module("vaxis"));
+
     const exe = b.addExecutable(.{
-        .name = "Zignal",
+        .name = "zignal",
         .root_module = exe_mod,
     });
 

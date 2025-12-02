@@ -1,4 +1,4 @@
-# Zignal
+# zignal
 
 An easy simple terminal chatting app, for the rare occasions you are on some device where  
 you don't wanna install anything properly and you wanna talk with people on your local network
@@ -8,13 +8,13 @@ you don't wanna install anything properly and you wanna talk with people on your
 1. Clone the repo:
 
 ```bash
-git clone https://github.com/Blize/Zignal
+git clone https://github.com/Blize/zignal.git
 ```
 
 2. Build the Application:
 
 ```bash
-cd Zignal
+cd zignal
 ```
 
 ```bash
@@ -29,10 +29,6 @@ cd zig-out/bin
 
 ## Usage
 
-> [!NOTE]
-> Currently there is max of 10 users (defined in config.zig)  
-> You can change that, just know that one user is one OS thread!
-
 Inside `zig-out/bin` or wherever the binary is, you have the following options:
 
 ### Server
@@ -40,7 +36,7 @@ Inside `zig-out/bin` or wherever the binary is, you have the following options:
 Write following command:
 
 ```bash
-./Zignal server
+./zignal server
 ```
 
 Now people in your netowrk should be able to join on your IP and PORT.  
@@ -56,7 +52,7 @@ To join as a Client you can either use localhost (if the Server is on the same d
 Command:
 
 ```bash
-./Zignal client [IP] [PORT]
+./zignal client [IP] [PORT]
 ```
 
 ### Help
@@ -64,37 +60,66 @@ Command:
 For help write:
 
 ```bash
-./Zignal -h
+./zignal -h
 ```
 
 Output:
 
 ```bash
-Usage: ./Zignal <server|client> [IP] [PORT]
+Usage: ./zignal <server|client> [OPTIONS] <IP> <PORT>
 
 Options:
-  server                Start the server.
-  client <IP> <PORT>    Start the client and connect to the specified IP and PORT.
+  server                              Start the server.
+  client [OPTIONS] <IP> <PORT>        Start the client and connect to the specified IP and PORT.
+
+Client Options:
+  -u, --username <name>   Set username for chat messages (max 23 characters)
 
 Examples:
-  ./Zignal server
-  ./Zignal client 127.0.0.1 8080
+  ./zignal server
+  ./zignal client 127.0.0.1 8080
+  ./zignal client -u Alice 127.0.0.1 8080
+  ./zignal client 127.0.0.1 8080 -u Bob
+  ./zignal client --username Charlie 127.0.0.1 8080
 ```
 
 ### Example
 
 ![example_image](./public/example.png)
 
+### TUI Features
+
+The client now includes a modern TUI (Terminal User Interface) built with [libvaxis](https://github.com/rockorager/libvaxis):
+
+- **Title Bar**: Displays "Zignal Chat" centered at the top
+- **Chat Area**: Scrollable message history with color-coded messages:
+  - System messages in yellow
+  - Server messages in cyan
+  - Usernames in magenta/bold
+  - Regular text in white
+- **Input Box**: Text input with cursor support at the bottom
+- **Status Bar**: Shows current username and keyboard shortcuts
+
+**Keyboard Shortcuts:**
+- `Enter`: Send message
+- `Ctrl+C`: Exit the application
+- `Ctrl+L`: Refresh the screen
+- `PgUp/PgDn`: Scroll through message history
+- `Backspace`: Delete character before cursor
+- Standard text input navigation (arrow keys, Home, End, etc.)
+
+**Commands:**
+- `/exit`: Exit the application
+- `/clear`: Clear the message history
+- `/help`: Show available commands
+
 ### Future Work
 
-I want to make an actual clean TUI for the Clients and then the Server with [Vaxis](https://github.com/rockorager/libvaxis). That includes:
+Additional TUI improvements planned:
 
 1. Client:
-
-   - Input Box
-   - Chat Box
-   - Add other Chats box
+   - Add other Chats box (multiple chat rooms)
 
 2. Server:
-   - Server Log Box
+   - Server Log Box with TUI
    - Nicer colors / Filtering between certain types of logs
