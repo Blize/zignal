@@ -378,16 +378,22 @@ pub const ServerTui = struct {
     }
 
     fn renderLogs(self: *ServerTui, area: Window, max_lines: u16) void {
-        // Get current filter
+        if (max_lines == 0) return;
+
+        // Get current filter safely
+        var filter_buf: [256]u8 = undefined;
+        var filter_len: usize = 0;
+
         const filter_first = self.filter_input.buf.firstHalf();
         const filter_second = self.filter_input.buf.secondHalf();
-        var filter_buf: [256]u8 = undefined;
-        const filter_len = filter_first.len + filter_second.len;
-        if (filter_len > 0 and filter_len <= filter_buf.len) {
+        const total_len = filter_first.len + filter_second.len;
+
+        if (total_len > 0 and total_len <= filter_buf.len) {
             @memcpy(filter_buf[0..filter_first.len], filter_first);
-            @memcpy(filter_buf[filter_first.len..filter_len], filter_second);
+            @memcpy(filter_buf[filter_first.len..total_len], filter_second);
+            filter_len = total_len;
         }
-        const filter = if (filter_len > 0 and filter_len <= filter_buf.len) filter_buf[0..filter_len] else "";
+        const filter = filter_buf[0..filter_len];
 
         // Collect filtered logs
         var filtered_indices: [512]usize = undefined;
@@ -426,7 +432,11 @@ pub const ServerTui = struct {
         var row: u16 = 0;
         var i: usize = display_start;
         while (i < end_idx and row < max_lines) : (i += 1) {
-            const entry = &self.logs.items[filtered_indices[i]];
+            if (i >= filtered_count) break;
+            const log_idx = filtered_indices[i];
+            if (log_idx >= self.logs.items.len) break;
+
+            const entry = &self.logs.items[log_idx];
 
             var timestamp_buf: [8]u8 = undefined;
             const timestamp = entry.getTimestampStr(&timestamp_buf);
@@ -452,5 +462,12 @@ pub const ServerTui = struct {
     fn addLog(self: *ServerTui, message: []const u8, level: LogEntry.Level) !void {
         const entry = try LogEntry.create(self.allocator, message, level);
         try self.logs.append(self.allocator, entry);
+
+        // Limit max logs to prevent memory issues
+        const max_logs: usize = 1000;
+        while (self.logs.items.len > max_logs) {
+            var old_entry = self.logs.orderedRemove(0);
+            old_entry.destroy();
+        }
     }
 };
