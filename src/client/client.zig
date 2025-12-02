@@ -30,54 +30,6 @@ pub const Client = struct {
         try tui.run();
     }
 
-    /// Legacy non-TUI client (can be used with --no-tui flag if implemented)
-    pub fn startClientLegacy(self: *Client) !void {
-        var stdout_buffer: [1024]u8 = undefined;
-
-        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-
-        const writer: *std.io.Writer = &stdout_writer.interface;
-
-        // Start receive thread
-        var thread = try std.Thread.spawn(.{}, Client.receiveMessages, .{self.*});
-        thread.detach();
-
-        while (true) {
-            var stdin_buffer: [1024]u8 = undefined;
-            var stdin_reader = std.fs.File.stdin().reader(&stdin_buffer);
-            const reader: *std.io.Reader = &stdin_reader.interface;
-
-            try writer.writeAll("Message: ");
-            try writer.flush();
-
-            // read one line
-            const line = reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
-                error.EndOfStream => {
-                    // User pressed Ctrl-D or pipe closed ? exit gracefully
-                    break;
-                },
-                else => return err,
-            };
-
-            // skip empty input (user pressed Enter with no text)
-            if (line.len == 0) continue;
-
-            const result = Client.checkForCommands(line);
-            switch (result) {
-                .handledContinue => continue,
-                .handledExit => break,
-                .noCommand => {},
-            }
-
-            Client.sendMessage(self.socket, line, self.username[0..self.username_len]) catch |err| {
-                std.log.err("Failed to send message: {}", .{err});
-                break;
-            };
-        }
-
-        _ = posix.close(self.socket);
-    }
-
     fn sendMessage(socket: posix.socket_t, message: []u8, username: []const u8) !void {
         var formatted_message: [BUFFER_SIZE]u8 = undefined;
         var formatted_len: usize = 0;
