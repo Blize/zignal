@@ -89,22 +89,33 @@ Examples:
 
 ### Some Features
 
-The client now includes a modern TUI (Terminal User Interface) built with [libvaxis](https://github.com/rockorager/libvaxis):
+#### **Client:**
+
+The client has a modern TUI (Terminal User Interface) built with [libvaxis](https://github.com/rockorager/libvaxis):
+
+This includes a nice chat box, inout and other stuff. As some basic controls for exiting, refreshing and scrolling.
 
 **Commands:**
+
 - `/exit`: Exit the application
 - `/clear`: Clear the message history
 - `/help`: Show available commands
 - More to come
 
+#### Server
+
+The server has a modern TUI (Terminal User Interface) built with [libvaxis](https://github.com/rockorager/libvaxis):
+
+This includes basic infos nicely presented like connected users etc. As well as a input bar for filtering through the logs
+
 ### Future Work
 
 Additional TUI improvements planned:
 
-1. Client:
-   - Add other Chats box (multiple chat rooms)
+- Add other Chats box (multiple chat rooms)
 
-2. Server:
-   - Server Log Box with TUI
-   - Core information about the server displayed
-   - Nicer colors / Filtering between certain types of logs
+Additional improvements planned:
+
+- Direct message command inside server
+- Encryption
+- And much more
