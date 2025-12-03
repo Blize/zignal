@@ -26,7 +26,7 @@ pub fn main() !void {
     }
 
     if (std.mem.eql(u8, args[1], "server")) {
-        const address = try net.Address.parseIp4("0.0.0.0", 0);
+        const address = try net.Address.parseIp4("0.0.0.0", 8080);
         var server = try Server.init(allocator, address, config.MAX_CLIENTS);
         defer server.deinit();
         try server.start();
