@@ -7,6 +7,7 @@ const utils = @import("../utils.zig");
 const Writer = @import("../writer.zig").Writer;
 const Reader = @import("../reader.zig").Reader;
 const client = @import("client.zig");
+const components = @import("../tui/components.zig");
 const ChatMessage = client.ChatMessage;
 const Command = client.Command;
 
@@ -15,7 +16,8 @@ const BUFFER_SIZE = config.BUFFER_SIZE;
 const Cell = vaxis.Cell;
 const Key = vaxis.Key;
 const Window = vaxis.Window;
-const TextInput = vaxis.widgets.TextInput;
+const InputField = components.InputField;
+const ScrollableList = components.ScrollableList;
 
 const colors = utils.colors;
 
@@ -37,9 +39,8 @@ pub const TuiClient = struct {
     tty: vaxis.Tty,
 
     // Chat state
-    messages: std.ArrayList(ChatMessage),
-    text_input: TextInput,
-    scroll_offset: usize,
+    messages: ScrollableList(ChatMessage),
+    text_input: InputField,
 
     // Running state
     running: bool,
@@ -69,9 +70,8 @@ pub const TuiClient = struct {
             .username = username,
             .vx = vx,
             .tty = tty,
-            .messages = .{},
-            .text_input = TextInput.init(allocator),
-            .scroll_offset = 0,
+            .messages = ScrollableList(ChatMessage).init(allocator),
+            .text_input = InputField.init(allocator),
             .running = true,
             .connected = true,
             .receiver_thread = null,
@@ -90,10 +90,10 @@ pub const TuiClient = struct {
             thread.join();
         }
 
-        for (self.messages.items) |*msg| {
+        for (self.messages.items.items) |*msg| {
             msg.destroy();
         }
-        self.messages.deinit(self.allocator);
+        self.messages.deinit();
 
         self.message_mutex.lock();
         for (self.pending_messages.items) |msg| {
@@ -163,23 +163,23 @@ pub const TuiClient = struct {
 
                 // Handle scroll
                 if (key.matches(Key.page_up, .{})) {
-                    if (self.scroll_offset < self.messages.items.len) {
-                        self.scroll_offset += 5;
+                    var i: usize = 0;
+                    while (i < 5) : (i += 1) {
+                        self.messages.scrollUp();
                     }
                     return;
                 }
 
                 if (key.matches(Key.page_down, .{})) {
-                    if (self.scroll_offset >= 5) {
-                        self.scroll_offset -= 5;
-                    } else {
-                        self.scroll_offset = 0;
+                    var i: usize = 0;
+                    while (i < 5) : (i += 1) {
+                        self.messages.scrollDown();
                     }
                     return;
                 }
 
                 // Pass to text input widget
-                try self.text_input.update(.{ .key_press = key });
+                try self.text_input.handleKeyPress(key);
             },
             .winsize => |ws| {
                 try self.vx.resize(self.allocator, self.tty.writer(), ws);
@@ -287,146 +287,95 @@ pub const TuiClient = struct {
     }
 
     fn renderMessages(self: *TuiClient, area: Window, max_lines: u16) void {
-        const messages = self.messages.items;
-        if (messages.len == 0) return;
+        if (self.messages.count() == 0) return;
 
-        const content_width = if (area.width > 2) area.width - 2 else area.width;
+        // Render function for each message
+        const renderMessage = struct {
+            pub fn render(msg: *const ChatMessage, row: u16, area_: Window) void {
+                var timestamp_buf: [8]u8 = undefined;
+                const timestamp = msg.getTimestampStr(&timestamp_buf);
 
-        // Calculate how many lines each message takes (with word wrap)
-        // and collect messages to display
-        var total_lines: usize = 0;
-        var msg_index = messages.len;
+                const timestamp_style: Cell.Style = .{ .fg = colors.timestamp };
 
-        // Skip messages based on scroll offset
-        var scroll_remaining = self.scroll_offset;
-        while (scroll_remaining > 0 and msg_index > 0) {
-            msg_index -= 1;
-            scroll_remaining -= 1;
-        }
+                // Determine message style based on content
+                if (std.mem.startsWith(u8, msg.content, "[System]")) {
+                    const style: Cell.Style = .{ .fg = colors.zig, .italic = true };
+                    const segments = [_]Cell.Segment{
+                        .{ .text = timestamp, .style = timestamp_style },
+                        .{ .text = " ", .style = .{} },
+                        .{ .text = msg.content, .style = style },
+                    };
+                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
+                } else if (std.mem.startsWith(u8, msg.content, "[Server]")) {
+                    const style: Cell.Style = .{ .fg = colors.zig, .bold = true };
+                    const segments = [_]Cell.Segment{
+                        .{ .text = timestamp, .style = timestamp_style },
+                        .{ .text = " ", .style = .{} },
+                        .{ .text = msg.content, .style = style },
+                    };
+                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
+                } else if (std.mem.startsWith(u8, msg.content, "[Help]")) {
+                    const style: Cell.Style = .{ .fg = colors.zig_dim, .italic = true };
+                    const segments = [_]Cell.Segment{
+                        .{ .text = timestamp, .style = timestamp_style },
+                        .{ .text = " ", .style = .{} },
+                        .{ .text = msg.content, .style = style },
+                    };
+                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
+                } else if (std.mem.indexOf(u8, msg.content, ": ")) |colon_pos| {
+                    // Render username with unique color, message in text color
+                    const username_part = msg.content[0..colon_pos];
+                    const separator = ": ";
+                    const message_part = msg.content[colon_pos + 2 ..];
 
-        // Collect messages and calculate wrapped lines
-        var display_data: [256]struct { idx: usize, lines: usize } = undefined;
-        var display_count: usize = 0;
+                    // Get color based on username hash
+                    const user_color = colors.forUsername(username_part);
+                    const username_style: Cell.Style = .{ .fg = user_color, .bold = true };
+                    const text_style: Cell.Style = .{ .fg = colors.text };
 
-        var temp_idx = msg_index;
-        while (temp_idx > 0 and total_lines < max_lines) {
-            temp_idx -= 1;
-            const msg = &messages[temp_idx];
-
-            // Calculate lines needed for this message (timestamp + content)
-            // Format: [HH:MM] username: message
-            var timestamp_buf: [8]u8 = undefined;
-            const timestamp = msg.getTimestampStr(&timestamp_buf);
-            const prefix_len = timestamp.len + 1; // timestamp + space
-
-            const msg_display_len = prefix_len + msg.content.len;
-            const lines_needed = (msg_display_len + content_width - 1) / content_width;
-            const actual_lines = @max(1, lines_needed);
-
-            if (display_count < display_data.len) {
-                display_data[display_count] = .{ .idx = temp_idx, .lines = actual_lines };
-                display_count += 1;
+                    const segments = [_]Cell.Segment{
+                        .{ .text = timestamp, .style = timestamp_style },
+                        .{ .text = " ", .style = .{} },
+                        .{ .text = username_part, .style = username_style },
+                        .{ .text = separator, .style = username_style },
+                        .{ .text = message_part, .style = text_style },
+                    };
+                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
+                } else {
+                    // Regular message
+                    const style: Cell.Style = .{ .fg = colors.text };
+                    const segments = [_]Cell.Segment{
+                        .{ .text = timestamp, .style = timestamp_style },
+                        .{ .text = " ", .style = .{} },
+                        .{ .text = msg.content, .style = style },
+                    };
+                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
+                }
             }
-            total_lines += actual_lines;
-        }
+        }.render;
 
-        // Render from top to bottom (reverse order)
-        var row: u16 = @intCast(@max(0, @as(i32, max_lines) - @as(i32, @intCast(total_lines))));
-        var i = display_count;
-        while (i > 0) {
-            i -= 1;
-            const data = display_data[i];
-            const msg = &messages[data.idx];
-
-            var timestamp_buf: [8]u8 = undefined;
-            const timestamp = msg.getTimestampStr(&timestamp_buf);
-
-            const timestamp_style: Cell.Style = .{ .fg = colors.timestamp };
-
-            // Determine message style based on content
-            if (std.mem.startsWith(u8, msg.content, "[System]")) {
-                const style: Cell.Style = .{ .fg = colors.zig, .italic = true };
-                const segments = [_]Cell.Segment{
-                    .{ .text = timestamp, .style = timestamp_style },
-                    .{ .text = " ", .style = .{} },
-                    .{ .text = msg.content, .style = style },
-                };
-                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
-            } else if (std.mem.startsWith(u8, msg.content, "[Server]")) {
-                const style: Cell.Style = .{ .fg = colors.zig, .bold = true };
-                const segments = [_]Cell.Segment{
-                    .{ .text = timestamp, .style = timestamp_style },
-                    .{ .text = " ", .style = .{} },
-                    .{ .text = msg.content, .style = style },
-                };
-                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
-            } else if (std.mem.startsWith(u8, msg.content, "[Help]")) {
-                const style: Cell.Style = .{ .fg = colors.zig_dim, .italic = true };
-                const segments = [_]Cell.Segment{
-                    .{ .text = timestamp, .style = timestamp_style },
-                    .{ .text = " ", .style = .{} },
-                    .{ .text = msg.content, .style = style },
-                };
-                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
-            } else if (std.mem.indexOf(u8, msg.content, ": ")) |colon_pos| {
-                // Render username with unique color, message in text color
-                const username_part = msg.content[0..colon_pos];
-                const separator = ": ";
-                const message_part = msg.content[colon_pos + 2 ..];
-
-                // Get color based on username hash
-                const user_color = colors.forUsername(username_part);
-                const username_style: Cell.Style = .{ .fg = user_color, .bold = true };
-                const text_style: Cell.Style = .{ .fg = colors.text };
-
-                const segments = [_]Cell.Segment{
-                    .{ .text = timestamp, .style = timestamp_style },
-                    .{ .text = " ", .style = .{} },
-                    .{ .text = username_part, .style = username_style },
-                    .{ .text = separator, .style = username_style },
-                    .{ .text = message_part, .style = text_style },
-                };
-                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
-            } else {
-                // Regular message
-                const style: Cell.Style = .{ .fg = colors.text };
-                const segments = [_]Cell.Segment{
-                    .{ .text = timestamp, .style = timestamp_style },
-                    .{ .text = " ", .style = .{} },
-                    .{ .text = msg.content, .style = style },
-                };
-                _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
-            }
-
-            row += @intCast(data.lines);
-        }
+        self.messages.draw(area, @intCast(max_lines), renderMessage);
     }
 
     fn sendMessage(self: *TuiClient) !void {
-        const first_half = self.text_input.buf.firstHalf();
-        const second_half = self.text_input.buf.secondHalf();
-        const message_len = first_half.len + second_half.len;
+        var message_buf: [BUFFER_SIZE]u8 = undefined;
+        const message_len = self.text_input.getText(&message_buf);
 
         if (message_len == 0) return;
 
-        var message_buf: [BUFFER_SIZE]u8 = undefined;
-        if (message_len > BUFFER_SIZE) return; // Message too long
-
-        @memcpy(message_buf[0..first_half.len], first_half);
-        @memcpy(message_buf[first_half.len..message_len], second_half);
         const message = message_buf[0..message_len];
 
         if (Command.parse(message)) |cmd| {
-            self.text_input.buf.clearRetainingCapacity();
+            self.text_input.clear();
             switch (cmd) {
                 .exit => {
                     self.running = false;
                 },
                 .clear => {
-                    for (self.messages.items) |*msg| {
+                    for (self.messages.items.items) |*msg| {
                         msg.destroy();
                     }
-                    self.messages.clearRetainingCapacity();
+                    self.messages.clear();
                 },
                 .help => {
                     try self.addMessage(Command.helpText());
@@ -455,15 +404,15 @@ pub const TuiClient = struct {
             return;
         };
 
-        self.text_input.buf.clearRetainingCapacity();
+        self.text_input.clear();
     }
 
     fn addMessage(self: *TuiClient, content: []const u8) !void {
         const msg = try ChatMessage.create(self.allocator, content);
-        try self.messages.append(self.allocator, msg);
+        try self.messages.append(msg);
 
         // Auto-scroll to bottom when new message arrives
-        self.scroll_offset = 0;
+        self.messages.scroll_offset = 0;
     }
 
     fn processPendingMessages(self: *TuiClient) void {

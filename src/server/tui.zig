@@ -5,11 +5,13 @@ const net = std.net;
 
 const config = @import("../config.zig");
 const utils = @import("../utils.zig");
+const components = @import("../tui/components.zig");
 
 const Cell = vaxis.Cell;
 const Key = vaxis.Key;
 const Window = vaxis.Window;
-const TextInput = vaxis.widgets.TextInput;
+const InputField = components.InputField;
+const ScrollableList = components.ScrollableList;
 
 const colors = utils.colors;
 
@@ -93,9 +95,8 @@ pub const ServerTui = struct {
     conn_display_len: usize,
 
     // Log state
-    logs: std.ArrayList(LogEntry),
-    filter_input: TextInput,
-    scroll_offset: usize,
+    logs: ScrollableList(LogEntry),
+    filter_input: InputField,
 
     // Running state
     running: *bool,
@@ -134,26 +135,25 @@ pub const ServerTui = struct {
             .port_display_len = 0,
             .conn_display = undefined,
             .conn_display_len = 0,
-            .logs = .{},
-            .filter_input = TextInput.init(allocator),
-            .scroll_offset = 0,
+            .logs = ScrollableList(LogEntry).init(allocator),
+            .filter_input = InputField.init(allocator),
             .running = running,
             .pending_logs = .{},
             .log_mutex = .{},
         };
 
         // Explicitly clear the filter input buffer to prevent random characters on startup
-        self.filter_input.buf.clearRetainingCapacity();
+        self.filter_input.clear();
 
         return self;
     }
 
     pub fn deinit(self: *ServerTui) void {
         // Clean up logs
-        for (self.logs.items) |*entry| {
+        for (self.logs.items.items) |*entry| {
             entry.destroy();
         }
-        self.logs.deinit(self.allocator);
+        self.logs.deinit();
 
         // Clean up pending logs
         self.log_mutex.lock();
@@ -238,27 +238,23 @@ pub const ServerTui = struct {
 
                 // Clear filter with Escape
                 if (key.matches(Key.escape, .{})) {
-                    self.filter_input.buf.clearRetainingCapacity();
+                    self.filter_input.clear();
                     return;
                 }
 
                 // Scroll logs with arrow keys
                 if (key.matches(Key.up, .{})) {
-                    if (self.scroll_offset < self.logs.items.len) {
-                        self.scroll_offset += 1;
-                    }
+                    self.logs.scrollUp();
                     return;
                 }
 
                 if (key.matches(Key.down, .{})) {
-                    if (self.scroll_offset > 0) {
-                        self.scroll_offset -= 1;
-                    }
+                    self.logs.scrollDown();
                     return;
                 }
 
                 // Pass to filter input
-                try self.filter_input.update(.{ .key_press = key });
+                try self.filter_input.handleKeyPress(key);
             },
             .winsize => |ws| {
                 try self.vx.resize(self.allocator, self.tty.writer(), ws);
@@ -365,114 +361,61 @@ pub const ServerTui = struct {
 
     fn renderFilterBox(self: *ServerTui, area: Window) void {
         const label_style: Cell.Style = .{ .fg = colors.zig, .bold = true };
-
-        // Label
-        const label = [_]Cell.Segment{.{ .text = " Filter: ", .style = label_style }};
-        _ = area.print(&label, .{ .row_offset = 0 });
-
-        // Input area (after label)
-        const input_area = area.child(.{
-            .x_off = 9,
-            .y_off = 0,
-            .width = if (area.width > 11) area.width - 11 else 1,
-            .height = 1,
-        });
-
-        // Ensure the text input has proper styling
-        self.filter_input.draw(input_area);
+        self.filter_input.drawWithLabel(area, " Filter: ", label_style);
     }
 
     fn renderLogs(self: *ServerTui, area: Window, max_lines: u16) void {
         if (max_lines == 0) return;
 
-        // Get current filter safely
+        // Get current filter
         var filter_buf: [256]u8 = undefined;
-        var filter_len: usize = 0;
-
-        const filter_first = self.filter_input.buf.firstHalf();
-        const filter_second = self.filter_input.buf.secondHalf();
-        const total_len = filter_first.len + filter_second.len;
-
-        if (total_len > 0 and total_len <= filter_buf.len) {
-            @memcpy(filter_buf[0..filter_first.len], filter_first);
-            @memcpy(filter_buf[filter_first.len..total_len], filter_second);
-            filter_len = total_len;
-        }
+        const filter_len = self.filter_input.getText(&filter_buf);
         const filter = filter_buf[0..filter_len];
 
-        // Collect filtered logs
-        var filtered_indices: [512]usize = undefined;
-        var filtered_count: usize = 0;
-
-        for (self.logs.items, 0..) |entry, i| {
-            // Apply filter
-            if (filter.len > 0) {
-                if (std.mem.indexOf(u8, entry.message, filter) == null) {
-                    continue;
-                }
+        // Helper function to check if entry should be included
+        const shouldInclude = struct {
+            pub fn call(entry: *const LogEntry, filter_text: []const u8) bool {
+                if (filter_text.len == 0) return true;
+                return std.mem.indexOf(u8, entry.message, filter_text) != null;
             }
-            if (filtered_count < filtered_indices.len) {
-                filtered_indices[filtered_count] = i;
-                filtered_count += 1;
+        }.call;
+
+        // Helper function to render a single log entry
+        const renderEntry = struct {
+            pub fn call(entry: *const LogEntry, row: u16, area_: Window) void {
+                var timestamp_buf: [8]u8 = undefined;
+                const timestamp = entry.getTimestampStr(&timestamp_buf);
+
+                const timestamp_style: Cell.Style = .{ .fg = colors.timestamp };
+                const level_style: Cell.Style = .{ .fg = entry.level.color(), .bold = true };
+                const msg_style: Cell.Style = .{ .fg = colors.text };
+
+                const segments = [_]Cell.Segment{
+                    .{ .text = " ", .style = .{} },
+                    .{ .text = timestamp, .style = timestamp_style },
+                    .{ .text = " [", .style = .{ .fg = colors.zig_dim } },
+                    .{ .text = entry.level.toString(), .style = level_style },
+                    .{ .text = "] ", .style = .{ .fg = colors.zig_dim } },
+                    .{ .text = entry.message, .style = msg_style },
+                };
+                _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
             }
-        }
+        }.call;
 
-        if (filtered_count == 0) {
-            const empty_style: Cell.Style = .{ .fg = colors.zig_dim, .italic = true };
-            const empty = [_]Cell.Segment{.{ .text = "  No logs to display", .style = empty_style }};
-            _ = area.print(&empty, .{ .row_offset = 0 });
-            return;
-        }
-
-        // Clamp scroll offset to valid range
-        if (self.scroll_offset > filtered_count) {
-            self.scroll_offset = filtered_count;
-        }
-
-        // Calculate visible range (from bottom with scroll offset)
-        const end_idx = if (filtered_count > self.scroll_offset) filtered_count - self.scroll_offset else 0;
-        const visible_count = @min(end_idx, max_lines);
-        const display_start = if (end_idx > visible_count) end_idx - visible_count else 0;
-
-        var row: u16 = 0;
-        var i: usize = display_start;
-        while (i < end_idx and row < max_lines) : (i += 1) {
-            if (i >= filtered_count) break;
-            const log_idx = filtered_indices[i];
-            if (log_idx >= self.logs.items.len) break;
-
-            const entry = &self.logs.items[log_idx];
-
-            var timestamp_buf: [8]u8 = undefined;
-            const timestamp = entry.getTimestampStr(&timestamp_buf);
-
-            const timestamp_style: Cell.Style = .{ .fg = colors.timestamp };
-            const level_style: Cell.Style = .{ .fg = entry.level.color(), .bold = true };
-            const msg_style: Cell.Style = .{ .fg = colors.text };
-
-            const segments = [_]Cell.Segment{
-                .{ .text = " ", .style = .{} },
-                .{ .text = timestamp, .style = timestamp_style },
-                .{ .text = " [", .style = .{ .fg = colors.zig_dim } },
-                .{ .text = entry.level.toString(), .style = level_style },
-                .{ .text = "] ", .style = .{ .fg = colors.zig_dim } },
-                .{ .text = entry.message, .style = msg_style },
-            };
-            _ = area.print(&segments, .{ .row_offset = row, .wrap = .word });
-
-            row += 1;
-        }
+        self.logs.drawFiltered(area, @intCast(max_lines), filter, shouldInclude, renderEntry);
     }
 
     fn addLog(self: *ServerTui, message: []const u8, level: LogEntry.Level) !void {
         const entry = try LogEntry.create(self.allocator, message, level);
-        try self.logs.append(self.allocator, entry);
+        try self.logs.append(entry);
 
         // Limit max logs to prevent memory issues
         const max_logs: usize = 1000;
-        while (self.logs.items.len > max_logs) {
-            var old_entry = self.logs.orderedRemove(0);
-            old_entry.destroy();
+        while (self.logs.count() > max_logs) {
+            if (self.logs.removeAt(0)) |old_entry| {
+                var mutable_entry = old_entry;
+                mutable_entry.destroy();
+            }
         }
     }
 };
