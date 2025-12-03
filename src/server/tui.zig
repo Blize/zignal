@@ -142,6 +142,9 @@ pub const ServerTui = struct {
             .log_mutex = .{},
         };
 
+        // Explicitly clear the filter input buffer to prevent random characters on startup
+        self.filter_input.buf.clearRetainingCapacity();
+
         return self;
     }
 
@@ -374,6 +377,8 @@ pub const ServerTui = struct {
             .width = if (area.width > 11) area.width - 11 else 1,
             .height = 1,
         });
+
+        // Ensure the text input has proper styling
         self.filter_input.draw(input_area);
     }
 
