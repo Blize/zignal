@@ -161,7 +161,7 @@ pub const TuiClient = struct {
                     return;
                 }
 
-                // Handle scroll
+                // Handle scroll with PageUp/PageDown (5 lines at a time)
                 if (key.matches(Key.page_up, .{})) {
                     var i: usize = 0;
                     while (i < 5) : (i += 1) {
@@ -175,6 +175,17 @@ pub const TuiClient = struct {
                     while (i < 5) : (i += 1) {
                         self.messages.scrollDown();
                     }
+                    return;
+                }
+
+                // Handle scroll with arrow keys (1 line at a time)
+                if (key.matches(Key.up, .{})) {
+                    self.messages.scrollUp();
+                    return;
+                }
+
+                if (key.matches(Key.down, .{})) {
+                    self.messages.scrollDown();
                     return;
                 }
 
@@ -273,7 +284,7 @@ pub const TuiClient = struct {
         };
         const status_row: u16 = @intCast(height - 1);
 
-        const status_text = " Enter: Send | PageUp/Down: Scroll | Ctrl+C: Exit ";
+        const status_text = " Enter: Send | ↑↓/PgUp/PgDn: Scroll | Ctrl+C: Exit ";
 
         for (status_text, 0..) |char, i| {
             if (i >= width) break;
