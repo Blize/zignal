@@ -133,6 +133,13 @@ pub const Server = struct {
     }
 
     pub fn deinit(self: *Server) void {
+        // Clean up all connected clients
+        for (0..self.connected) |i| {
+            posix.close(self.clients[i].socket);
+            self.clients[i].deinit(self.allocator);
+        }
+        self.connected = 0;
+
         self.allocator.free(self.polls);
         self.allocator.free(self.clients);
     }
