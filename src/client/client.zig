@@ -71,7 +71,7 @@ pub const Client = struct {
 
         const username = self.username[0..self.username_len];
 
-        var tui = try TuiClient.init(allocator, self.socket, username);
+        var tui = try TuiClient.init(allocator, self.socket, self.address, username);
         defer tui.deinit();
 
         try tui.run();

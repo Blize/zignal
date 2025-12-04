@@ -33,6 +33,7 @@ const Event = union(enum) {
 pub const TuiClient = struct {
     allocator: std.mem.Allocator,
     socket: posix.socket_t,
+    address: std.net.Address,
     username: []const u8,
 
     vx: vaxis.Vaxis,
@@ -45,6 +46,7 @@ pub const TuiClient = struct {
     // Running state
     running: bool,
     connected: bool,
+    reconnecting: bool,
 
     // Receiver thread
     receiver_thread: ?std.Thread,
@@ -53,7 +55,7 @@ pub const TuiClient = struct {
     pending_messages: std.ArrayList([]const u8),
     message_mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: std.mem.Allocator, socket: posix.socket_t, username: []const u8) !*TuiClient {
+    pub fn init(allocator: std.mem.Allocator, socket: posix.socket_t, address: std.net.Address, username: []const u8) !*TuiClient {
         const self = try allocator.create(TuiClient);
         errdefer allocator.destroy(self);
 
@@ -67,6 +69,7 @@ pub const TuiClient = struct {
         self.* = .{
             .allocator = allocator,
             .socket = socket,
+            .address = address,
             .username = username,
             .vx = vx,
             .tty = tty,
@@ -74,6 +77,7 @@ pub const TuiClient = struct {
             .text_input = InputField.init(allocator),
             .running = true,
             .connected = true,
+            .reconnecting = false,
             .receiver_thread = null,
             .pending_messages = .{},
             .message_mutex = .{},
@@ -441,10 +445,15 @@ pub const TuiClient = struct {
         var message_buffer: [BUFFER_SIZE]u8 = undefined;
 
         while (self.running) {
+            if (self.reconnecting) {
+                self.attemptReconnect();
+                continue;
+            }
+
             const message = Reader.readClientMessage(self.socket, &message_buffer) catch |err| {
                 if (self.running) {
-                    var err_buf: [64]u8 = undefined;
-                    const err_msg = std.fmt.bufPrint(&err_buf, "[System] Connection error: {}", .{err}) catch "[System] Connection error";
+                    var err_buf: [128]u8 = undefined;
+                    const err_msg = std.fmt.bufPrint(&err_buf, "[System] Connection lost: {}. Attempting to reconnect...", .{err}) catch "[System] Connection lost. Attempting to reconnect...";
                     const owned = self.allocator.dupe(u8, err_msg) catch continue;
 
                     self.message_mutex.lock();
@@ -454,13 +463,14 @@ pub const TuiClient = struct {
                     self.message_mutex.unlock();
 
                     self.connected = false;
-                    self.running = false;
+                    self.reconnecting = true;
+                    posix.close(self.socket);
                 }
-                break;
+                continue;
             };
 
             if (message == null) {
-                const owned = self.allocator.dupe(u8, "[System] Disconnected from server") catch continue;
+                const owned = self.allocator.dupe(u8, "[System] Disconnected from server. Attempting to reconnect...") catch continue;
 
                 self.message_mutex.lock();
                 self.pending_messages.append(self.allocator, owned) catch {
@@ -469,8 +479,9 @@ pub const TuiClient = struct {
                 self.message_mutex.unlock();
 
                 self.connected = false;
-                self.running = false;
-                break;
+                self.reconnecting = true;
+                posix.close(self.socket);
+                continue;
             }
 
             const owned = self.allocator.dupe(u8, message.?) catch continue;
@@ -481,5 +492,50 @@ pub const TuiClient = struct {
             };
             self.message_mutex.unlock();
         }
+    }
+
+    fn attemptReconnect(self: *TuiClient) void {
+        std.Thread.sleep(3 * std.time.ns_per_s);
+
+        if (!self.running) return;
+
+        const new_socket = posix.socket(self.address.any.family, posix.SOCK.STREAM, posix.IPPROTO.TCP) catch |err| {
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "[System] Reconnect failed (socket): {}. Retrying in 3 seconds...", .{err}) catch "[System] Reconnect failed. Retrying in 3 seconds...";
+            const owned = self.allocator.dupe(u8, err_msg) catch return;
+
+            self.message_mutex.lock();
+            self.pending_messages.append(self.allocator, owned) catch {
+                self.allocator.free(owned);
+            };
+            self.message_mutex.unlock();
+            return;
+        };
+
+        posix.connect(new_socket, &self.address.any, self.address.getOsSockLen()) catch |err| {
+            posix.close(new_socket);
+            var err_buf: [128]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "[System] Reconnect failed (connect): {}. Retrying in 3 seconds...", .{err}) catch "[System] Reconnect failed. Retrying in 3 seconds...";
+            const owned = self.allocator.dupe(u8, err_msg) catch return;
+
+            self.message_mutex.lock();
+            self.pending_messages.append(self.allocator, owned) catch {
+                self.allocator.free(owned);
+            };
+            self.message_mutex.unlock();
+            return;
+        };
+
+        self.socket = new_socket;
+        self.connected = true;
+        self.reconnecting = false;
+
+        const owned = self.allocator.dupe(u8, "[System] Reconnected to server!") catch return;
+
+        self.message_mutex.lock();
+        self.pending_messages.append(self.allocator, owned) catch {
+            self.allocator.free(owned);
+        };
+        self.message_mutex.unlock();
     }
 };
