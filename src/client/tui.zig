@@ -47,6 +47,7 @@ pub const TuiClient = struct {
     running: bool,
     connected: bool,
     reconnecting: bool,
+    socket_valid: bool,
 
     // Receiver thread
     receiver_thread: ?std.Thread,
@@ -78,6 +79,7 @@ pub const TuiClient = struct {
             .running = true,
             .connected = true,
             .reconnecting = false,
+            .socket_valid = true,
             .receiver_thread = null,
             .pending_messages = .{},
             .message_mutex = .{},
@@ -88,7 +90,10 @@ pub const TuiClient = struct {
 
     pub fn deinit(self: *TuiClient) void {
         self.running = false;
-        posix.close(self.socket);
+        if (self.socket_valid) {
+            posix.close(self.socket);
+            self.socket_valid = false;
+        }
 
         if (self.receiver_thread) |thread| {
             thread.join();
@@ -449,6 +454,7 @@ pub const TuiClient = struct {
                     self.connected = false;
                     self.reconnecting = true;
                     posix.close(self.socket);
+                    self.socket_valid = false;
                 }
                 continue;
             };
@@ -465,6 +471,7 @@ pub const TuiClient = struct {
                 self.connected = false;
                 self.reconnecting = true;
                 posix.close(self.socket);
+                self.socket_valid = false;
                 continue;
             }
 
@@ -513,6 +520,7 @@ pub const TuiClient = struct {
         self.socket = new_socket;
         self.connected = true;
         self.reconnecting = false;
+        self.socket_valid = true;
 
         const owned = self.allocator.dupe(u8, "[System] Reconnected to server!") catch return;
 
