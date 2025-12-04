@@ -282,22 +282,6 @@ pub const TuiClient = struct {
         // Draw text input inside the bordered box
         self.text_input.draw(input_box);
 
-        // === STATUS BAR ===
-        const status_style: Cell.Style = .{
-            .fg = colors.zig_dim,
-        };
-        const status_row: u16 = @intCast(height - 1);
-
-        const status_text = " Enter: Send | ↑↓/PgUp/PgDn: Scroll | Ctrl+C: Exit ";
-
-        for (status_text, 0..) |char, i| {
-            if (i >= width) break;
-            win.writeCell(@intCast(i), status_row, .{
-                .char = .{ .grapheme = &[_]u8{char}, .width = 1 },
-                .style = status_style,
-            });
-        }
-
         try self.vx.render(self.tty.writer());
     }
 
