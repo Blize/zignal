@@ -34,7 +34,7 @@ pub fn main() !void {
         // Initialize platform networking
         try xnet.init();
         defer xnet.deinit();
-        
+
         var username: ?[]const u8 = null;
         var ip: ?[]const u8 = null;
         var port: ?u16 = null;

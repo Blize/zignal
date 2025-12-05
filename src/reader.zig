@@ -63,7 +63,7 @@ pub const Reader = struct {
     pub fn readClientMessage(socket: net.socket_t, buffer: *[BUFFER_SIZE]u8) !?[]u8 {
         var len_buf: [4]u8 = undefined;
         var len_read: usize = 0;
-        
+
         // Read the 4-byte length prefix
         while (len_read < 4) {
             const n = try net.read(socket, len_buf[len_read..]);

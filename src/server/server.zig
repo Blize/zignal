@@ -148,7 +148,7 @@ pub const Server = struct {
 
         self.allocator.free(self.polls);
         self.allocator.free(self.clients);
-        
+
         xnet.deinit();
     }
 
@@ -164,13 +164,13 @@ pub const Server = struct {
         // Create socket (non-blocking set separately for Windows compatibility)
         const listener = try xnet.socket(xnet.AF.INET, xnet.SOCK.STREAM, xnet.IPPROTO.TCP);
         defer xnet.close(listener);
-        
+
         // Set non-blocking mode
         try xnet.setNonBlocking(listener);
 
         // Set socket options
         xnet.setReuseAddr(listener) catch {};
-        
+
         try xnet.bind(listener, &self.address.any, self.address.getOsSockLen());
         try xnet.listen(listener, 128);
 

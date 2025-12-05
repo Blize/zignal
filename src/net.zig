@@ -203,7 +203,7 @@ pub fn listen(sock: socket_t, backlog: u31) !void {
 pub fn setReuseAddr(sock: socket_t) !void {
     const value: c_int = 1;
     const value_bytes = std.mem.toBytes(value);
-    
+
     if (is_windows) {
         const SOL_SOCKET: i32 = 0xffff;
         const SO_REUSEADDR: i32 = 4;
