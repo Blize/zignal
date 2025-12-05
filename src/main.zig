@@ -1,7 +1,7 @@
 const std = @import("std");
 const net = std.net;
-const posix = std.posix;
 
+const xnet = @import("net.zig");
 const Server = @import("server/server.zig").Server;
 const Client = @import("client/client.zig").Client;
 const config = @import("config.zig");
@@ -31,6 +31,10 @@ pub fn main() !void {
         defer server.deinit();
         try server.start();
     } else if (std.mem.eql(u8, args[1], "client")) {
+        // Initialize platform networking
+        try xnet.init();
+        defer xnet.deinit();
+        
         var username: ?[]const u8 = null;
         var ip: ?[]const u8 = null;
         var port: ?u16 = null;
@@ -72,8 +76,8 @@ pub fn main() !void {
         }
 
         const address = try net.Address.parseIp4(ip.?, port.?);
-        const socket = try posix.socket(address.any.family, posix.SOCK.STREAM, posix.IPPROTO.TCP);
-        try posix.connect(socket, &address.any, address.getOsSockLen());
+        const socket = try xnet.socket(xnet.AF.INET, xnet.SOCK.STREAM, xnet.IPPROTO.TCP);
+        try xnet.connect(socket, &address.any, address.getOsSockLen());
 
         var client = Client{
             .socket = socket,

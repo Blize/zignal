@@ -1,5 +1,5 @@
 const std = @import("std");
-const posix = std.posix;
+const net = @import("net.zig");
 const Allocator = std.mem.Allocator;
 
 const config = @import("config.zig");
@@ -30,7 +30,7 @@ pub const Reader = struct {
     ///   - ![]const u8 on success (the message bytes)
     ///   - null if no complete message is available yet (WouldBlock or incomplete)
     ///   - error.Closed if the connection is closed (0 bytes read)
-    pub fn readMessage(self: *Reader, socket: posix.socket_t) !?[]const u8 {
+    pub fn readMessage(self: *Reader, socket: net.socket_t) !?[]const u8 {
         var buf = self.buf;
 
         while (true) {
@@ -41,7 +41,7 @@ pub const Reader = struct {
 
             // No complete message yet, try to read more from the socket
             const pos = self.pos;
-            const n = posix.read(socket, buf[pos..]) catch |err| switch (err) {
+            const n = net.read(socket, buf[pos..]) catch |err| switch (err) {
                 error.WouldBlock => {
                     // No data available right now, return null
                     return null;
@@ -58,18 +58,19 @@ pub const Reader = struct {
         }
     }
 
-    /// Read a complete message from the socket
+    /// Read a complete message from the socket (blocking)
     /// Returns the message bytes or null on disconnect
-    pub fn readClientMessage(socket: posix.socket_t, buffer: *[BUFFER_SIZE]u8) !?[]u8 {
+    pub fn readClientMessage(socket: net.socket_t, buffer: *[BUFFER_SIZE]u8) !?[]u8 {
         var len_buf: [4]u8 = undefined;
-        const len_read = try posix.read(socket, &len_buf);
-
-        if (len_read == 0) {
-            return null; // Connection closed
-        }
-
-        if (len_read != 4) {
-            return error.PartialLengthRead;
+        var len_read: usize = 0;
+        
+        // Read the 4-byte length prefix
+        while (len_read < 4) {
+            const n = try net.read(socket, len_buf[len_read..]);
+            if (n == 0) {
+                return null; // Connection closed
+            }
+            len_read += n;
         }
 
         const msg_len = std.mem.readInt(u32, &len_buf, .little);
@@ -79,15 +80,11 @@ pub const Reader = struct {
 
         var total_read: usize = 0;
         while (total_read < msg_len) {
-            const chunk = try posix.read(socket, buffer[total_read..msg_len]);
+            const chunk = try net.read(socket, buffer[total_read..msg_len]);
             if (chunk == 0) {
                 return null; // Connection closed mid-message
             }
             total_read += chunk;
-        }
-
-        if (total_read != msg_len) {
-            return error.IncompleteMessage;
         }
 
         return buffer[0..msg_len];

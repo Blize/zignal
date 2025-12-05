@@ -1,5 +1,5 @@
 const std = @import("std");
-const posix = std.posix;
+const xnet = @import("../net.zig");
 const TuiClient = @import("tui.zig").TuiClient;
 const utils = @import("../utils.zig");
 
@@ -58,7 +58,7 @@ pub const ChatMessage = struct {
 // ============================================================================
 
 pub const Client = struct {
-    socket: posix.socket_t,
+    socket: xnet.socket_t,
     address: std.net.Address,
     id: u32,
     username: [24]u8,

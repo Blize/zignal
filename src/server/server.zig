@@ -1,13 +1,16 @@
 const std = @import("std");
-const net = std.net;
-const posix = std.posix;
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const config = @import("../config.zig");
+const xnet = @import("../net.zig");
 const Reader = @import("../reader.zig").Reader;
 const Writer = @import("../writer.zig").Writer;
 const ServerTui = @import("tui.zig").ServerTui;
 const LogEntry = @import("tui.zig").LogEntry;
+
+const posix = std.posix;
+const net = std.net;
 
 const BUFFER_SIZE = config.BUFFER_SIZE;
 const MAX_CLIENTS = config.MAX_CLIENTS;
@@ -19,17 +22,17 @@ var local_ip_buf: [16]u8 = undefined;
 /// and checking what source address would be used to reach 8.8.8.8
 fn getLocalIp() ?[]const u8 {
     // Create a UDP socket (doesn't actually send anything)
-    const sock = posix.socket(posix.AF.INET, posix.SOCK.DGRAM, 0) catch return null;
-    defer posix.close(sock);
+    const sock = xnet.socket(xnet.AF.INET, xnet.SOCK.DGRAM, 0) catch return null;
+    defer xnet.close(sock);
 
     // "Connect" to Google DNS - this doesn't send data, just sets the route
     const dest = net.Address.parseIp4("8.8.8.8", 53) catch return null;
-    posix.connect(sock, &dest.any, dest.getOsSockLen()) catch return null;
+    xnet.connect(sock, &dest.any, dest.getOsSockLen()) catch return null;
 
     // Get the local address that would be used
     var local_addr: net.Address = undefined;
     var addr_len: posix.socklen_t = @sizeOf(net.Address);
-    posix.getsockname(sock, &local_addr.any, &addr_len) catch return null;
+    xnet.getsockname(sock, &local_addr.any, &addr_len) catch return null;
 
     // Format the IP address
     const bytes = @as(*const [4]u8, @ptrCast(&local_addr.in.sa.addr));
@@ -43,10 +46,10 @@ fn getLocalIp() ?[]const u8 {
 /// Client represents a connected client with its socket and reader state
 const ClientConnection = struct {
     reader: Reader,
-    socket: posix.socket_t,
+    socket: xnet.socket_t,
     address: std.net.Address,
 
-    fn init(allocator: Allocator, socket: posix.socket_t, address: std.net.Address) !ClientConnection {
+    fn init(allocator: Allocator, socket: xnet.socket_t, address: std.net.Address) !ClientConnection {
         const reader = try Reader.init(allocator, BUFFER_SIZE);
         return .{
             .reader = reader,
@@ -70,13 +73,13 @@ pub const Server = struct {
     max_clients: usize,
 
     // Poll file descriptors: [0] is listening socket, [1..] are client sockets
-    polls: []posix.pollfd,
+    polls: []xnet.PollFd,
 
     // Client connections: only [0..connected] are valid
     clients: []ClientConnection,
 
     // Slice of polls starting from index 1, for easier management
-    client_polls: []posix.pollfd,
+    client_polls: []xnet.PollFd,
 
     // Number of currently connected clients
     connected: usize,
@@ -97,8 +100,11 @@ pub const Server = struct {
     pub fn init(allocator: Allocator, address: net.Address, max_clients: ?usize) !Server {
         const actual_max = max_clients orelse MAX_CLIENTS;
 
+        // Initialize platform-specific networking
+        try xnet.init();
+
         // +1 for the listening socket
-        const polls = try allocator.alloc(posix.pollfd, actual_max + 1);
+        const polls = try allocator.alloc(xnet.PollFd, actual_max + 1);
         errdefer allocator.free(polls);
 
         const clients = try allocator.alloc(ClientConnection, actual_max);
@@ -135,13 +141,15 @@ pub const Server = struct {
     pub fn deinit(self: *Server) void {
         // Clean up all connected clients
         for (0..self.connected) |i| {
-            posix.close(self.clients[i].socket);
+            xnet.close(self.clients[i].socket);
             self.clients[i].deinit(self.allocator);
         }
         self.connected = 0;
 
         self.allocator.free(self.polls);
         self.allocator.free(self.clients);
+        
+        xnet.deinit();
     }
 
     fn log(self: *Server, comptime fmt: []const u8, args: anytype, level: LogEntry.Level) void {
@@ -153,18 +161,22 @@ pub const Server = struct {
     }
 
     pub fn start(self: *Server) !void {
-        const tpe: u32 = posix.SOCK.STREAM | posix.SOCK.NONBLOCK;
-        const protocol = posix.IPPROTO.TCP;
-        const listener = try posix.socket(self.address.any.family, tpe, protocol);
-        defer posix.close(listener);
+        // Create socket (non-blocking set separately for Windows compatibility)
+        const listener = try xnet.socket(xnet.AF.INET, xnet.SOCK.STREAM, xnet.IPPROTO.TCP);
+        defer xnet.close(listener);
+        
+        // Set non-blocking mode
+        try xnet.setNonBlocking(listener);
 
-        try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-        try posix.bind(listener, &self.address.any, self.address.getOsSockLen());
-        try posix.listen(listener, 128);
+        // Set socket options
+        xnet.setReuseAddr(listener) catch {};
+        
+        try xnet.bind(listener, &self.address.any, self.address.getOsSockLen());
+        try xnet.listen(listener, 128);
 
         var addr: net.Address = undefined;
         var addr_len: posix.socklen_t = @sizeOf(net.Address);
-        try posix.getsockname(listener, &addr.any, &addr_len);
+        try xnet.getsockname(listener, &addr.any, &addr_len);
 
         self.bound_port = addr.getPort();
         self.log("Listening on port: {}", .{self.bound_port}, .info);
@@ -188,12 +200,12 @@ pub const Server = struct {
         self.polls[0] = .{
             .fd = listener,
             .revents = 0,
-            .events = posix.POLL.IN,
+            .events = xnet.PollFd.POLLIN,
         };
 
         while (self.running) {
             // Poll with timeout so we can check running state
-            _ = posix.poll(self.polls[0 .. self.connected + 1], 100) catch |err| {
+            _ = xnet.poll(self.polls[0 .. self.connected + 1], 100) catch |err| {
                 self.log("Poll error: {}", .{err}, .err);
                 continue;
             };
@@ -217,14 +229,14 @@ pub const Server = struct {
                 var client = &self.clients[i];
 
                 // Check for errors or disconnection
-                if (revents & posix.POLL.HUP == posix.POLL.HUP) {
+                if (revents & xnet.PollFd.POLLHUP == xnet.PollFd.POLLHUP) {
                     self.log("Client disconnected", .{}, .warn);
                     self.removeClient(i);
                     continue;
                 }
 
                 // Read available data
-                if (revents & posix.POLL.IN == posix.POLL.IN) {
+                if (revents & xnet.PollFd.POLLIN == xnet.PollFd.POLLIN) {
                     while (true) {
                         const msg = client.readMessage() catch |err| {
                             self.log("Error reading from client: {}", .{err}, .err);
@@ -238,7 +250,7 @@ pub const Server = struct {
                         self.log("Message: {s}", .{msg}, .info);
 
                         // Broadcast to all other clients
-                        const sockets = self.allocator.alloc(posix.socket_t, self.connected) catch continue;
+                        const sockets = self.allocator.alloc(xnet.socket_t, self.connected) catch continue;
                         defer self.allocator.free(sockets);
                         for (0..self.connected) |j| {
                             sockets[j] = self.clients[j].socket;
@@ -258,25 +270,31 @@ pub const Server = struct {
     }
 
     /// Accept all pending connections and add them to the client list
-    fn acceptClients(self: *Server, listener: posix.socket_t) !void {
+    fn acceptClients(self: *Server, listener: xnet.socket_t) !void {
         while (true) {
             var client_address: net.Address = undefined;
             var client_address_len: posix.socklen_t = @sizeOf(net.Address);
 
-            const socket = posix.accept(listener, &client_address.any, &client_address_len, posix.SOCK.NONBLOCK) catch |err| switch (err) {
+            const socket = xnet.accept(listener, &client_address.any, &client_address_len) catch |err| switch (err) {
                 error.WouldBlock => return,
                 else => return err,
             };
 
+            // Set new client socket to non-blocking
+            xnet.setNonBlocking(socket) catch {
+                xnet.close(socket);
+                continue;
+            };
+
             if (self.connected >= self.max_clients) {
                 self.log("Max clients reached, rejecting connection", .{}, .warn);
-                posix.close(socket);
+                xnet.close(socket);
                 continue;
             }
 
             const client = ClientConnection.init(self.allocator, socket, client_address) catch |err| {
                 self.log("Failed to initialize client: {}", .{err}, .err);
-                posix.close(socket);
+                xnet.close(socket);
                 continue;
             };
 
@@ -285,7 +303,7 @@ pub const Server = struct {
             self.client_polls[idx] = .{
                 .fd = socket,
                 .revents = 0,
-                .events = posix.POLL.IN,
+                .events = xnet.PollFd.POLLIN,
             };
             self.connected += 1;
 
@@ -302,7 +320,7 @@ pub const Server = struct {
     /// Remove a client from the connected list
     fn removeClient(self: *Server, idx: usize) void {
         var client = self.clients[idx];
-        posix.close(client.socket);
+        xnet.close(client.socket);
         client.deinit(self.allocator);
 
         // Swap with the last client to maintain a compact array

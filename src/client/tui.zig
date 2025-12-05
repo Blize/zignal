@@ -1,9 +1,9 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
-const posix = std.posix;
 
 const config = @import("../config.zig");
 const utils = @import("../utils.zig");
+const xnet = @import("../net.zig");
 const Writer = @import("../writer.zig").Writer;
 const Reader = @import("../reader.zig").Reader;
 const client = @import("client.zig");
@@ -32,7 +32,7 @@ const Event = union(enum) {
 /// TUI Client for the chat application
 pub const TuiClient = struct {
     allocator: std.mem.Allocator,
-    socket: posix.socket_t,
+    socket: xnet.socket_t,
     address: std.net.Address,
     username: []const u8,
 
@@ -56,7 +56,7 @@ pub const TuiClient = struct {
     pending_messages: std.ArrayList([]const u8),
     message_mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: std.mem.Allocator, socket: posix.socket_t, address: std.net.Address, username: []const u8) !*TuiClient {
+    pub fn init(allocator: std.mem.Allocator, socket: xnet.socket_t, address: std.net.Address, username: []const u8) !*TuiClient {
         const self = try allocator.create(TuiClient);
         errdefer allocator.destroy(self);
 
@@ -91,7 +91,7 @@ pub const TuiClient = struct {
     pub fn deinit(self: *TuiClient) void {
         self.running = false;
         if (self.socket_valid) {
-            posix.close(self.socket);
+            xnet.close(self.socket);
             self.socket_valid = false;
         }
 
@@ -453,7 +453,7 @@ pub const TuiClient = struct {
 
                     self.connected = false;
                     self.reconnecting = true;
-                    posix.close(self.socket);
+                    xnet.close(self.socket);
                     self.socket_valid = false;
                 }
                 continue;
@@ -470,7 +470,7 @@ pub const TuiClient = struct {
 
                 self.connected = false;
                 self.reconnecting = true;
-                posix.close(self.socket);
+                xnet.close(self.socket);
                 self.socket_valid = false;
                 continue;
             }
@@ -490,7 +490,7 @@ pub const TuiClient = struct {
 
         if (!self.running) return;
 
-        const new_socket = posix.socket(self.address.any.family, posix.SOCK.STREAM, posix.IPPROTO.TCP) catch |err| {
+        const new_socket = xnet.socket(xnet.AF.INET, xnet.SOCK.STREAM, xnet.IPPROTO.TCP) catch |err| {
             var err_buf: [128]u8 = undefined;
             const err_msg = std.fmt.bufPrint(&err_buf, "[System] Reconnect failed (socket): {}. Retrying in 3 seconds...", .{err}) catch "[System] Reconnect failed. Retrying in 3 seconds...";
             const owned = self.allocator.dupe(u8, err_msg) catch return;
@@ -503,8 +503,8 @@ pub const TuiClient = struct {
             return;
         };
 
-        posix.connect(new_socket, &self.address.any, self.address.getOsSockLen()) catch |err| {
-            posix.close(new_socket);
+        xnet.connect(new_socket, &self.address.any, self.address.getOsSockLen()) catch |err| {
+            xnet.close(new_socket);
             var err_buf: [128]u8 = undefined;
             const err_msg = std.fmt.bufPrint(&err_buf, "[System] Reconnect failed (connect): {}. Retrying in 3 seconds...", .{err}) catch "[System] Reconnect failed. Retrying in 3 seconds...";
             const owned = self.allocator.dupe(u8, err_msg) catch return;
