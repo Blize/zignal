@@ -1,121 +1,134 @@
-# zignal
+<div align="center">
 
-An easy simple terminal chatting app, for the rare occasions you are on some device where  
-you don't wanna install anything properly and you wanna talk with people on your local network
+# ⚡ zignal
 
-## Installation
+**A lightweight, fast terminal chat application written in Zig**
 
-1. Clone the repo:
+[![Zig](https://img.shields.io/badge/Zig-F7A41D?style=for-the-badge&logo=zig&logoColor=white)](https://ziglang.org/)
+[![License](https://img.shields.io/badge/License-AGPL_v3-blue?style=for-the-badge)](LICENSE)
+[![GitHub](https://img.shields.io/badge/GitHub-Blize-181717?style=for-the-badge&logo=github)](https://github.com/Blize/zignal)
+
+*For those moments when you need quick, hassle-free communication*
+
+![zignal demo](./public/example.png)
+
+</div>
+
+---
+
+## ✨ Features
+
+- 🍎 **macOS & Linux** — Full support for Unix-like systems
+- 💬 **Modern TUI** — Beautiful terminal interface powered by [libvaxis](https://github.com/rockorager/libvaxis)
+- 🔌 **Simple Networking** — Connect to anyone instantly
+- ⌨️ **Intuitive Controls** — Easy scrolling, filtering, and navigation
+- 🪶 **Lightweight** — Single binary, minimal footprint
+
+---
+
+## 📦 Installation
+
+### Prerequisites
+
+- [Zig](https://ziglang.org/download/) **0.15.2**
+- macOS or Linux (Windows not supported)
+
+### Dependencies
+
+- [libvaxis](https://github.com/rockorager/libvaxis) — Modern TUI library *(fetched automatically)*
+
+### Build from Source
 
 ```bash
+# Clone the repository
 git clone https://github.com/Blize/zignal.git
+
+# Build the application
+cd zignal && zig build
+
+# The binary is ready at zig-out/bin/zignal
 ```
 
-2. Build the Application:
+---
 
-```bash
-cd zignal
-```
+## 🚀 Usage
 
-```bash
-zig build
-```
+### Starting a Server
 
-```bash
-cd zig-out/bin
-```
-
-3. Go to [Usage](##Usage)
-
-## Usage
-
-Inside `zig-out/bin` or wherever the binary is, you have the following options:
-
-### Server
-
-Write following command:
+Host a chat room for others to join:
 
 ```bash
 ./zignal server
 ```
 
-Now people in your netowrk should be able to join on your IP and PORT.  
-For joining go to the following step.
+Share your IP address and port with others on your network so they can connect!
 
-### Client
-
-> [!NOTE]
-> Sometimes your PC doesnt allow Network connections from unknown binary's  
-> Either try to give the correct rights to the binary or disable your firewall
-
-To join as a Client you can either use localhost (if the Server is on the same device) or join with IP and PORT.
-Command:
+### Joining as a Client
 
 ```bash
-./zignal client [IP] [PORT]
+./zignal client <IP> <PORT>
+
+# With a custom username
+./zignal client -u YourName <IP> <PORT>
+```
+
+### Examples
+
+```bash
+# Start a server
+./zignal server
+
+# Connect to localhost
+./zignal client 127.0.0.1 8080
+
+# Connect with a username
+./zignal client -u Alice 192.168.1.100 8080
+./zignal client --username Bob 192.168.1.100 8080
 ```
 
 ### Help
-
-For help write:
 
 ```bash
 ./zignal -h
 ```
 
-Output:
+---
 
-```bash
-Usage: ./zignal <server|client> [OPTIONS] <IP> <PORT>
+## 🎮 Controls & Commands
 
-Options:
-  server                              Start the server.
-  client [OPTIONS] <IP> <PORT>        Start the client and connect to the specified IP and PORT.
+### Client Commands
 
-Client Options:
-  -u, --username <name>   Set username for chat messages (max 23 characters)
+| Command   | Description                |
+|-----------|----------------------------|
+| `/exit`   | Exit the application       |
+| `/clear`  | Clear the message history  |
+| `/help`   | Show available commands    |
 
-Examples:
-  ./zignal server
-  ./zignal client 127.0.0.1 8080
-  ./zignal client -u Alice 127.0.0.1 8080
-  ./zignal client 127.0.0.1 8080 -u Bob
-  ./zignal client --username Charlie 127.0.0.1 8080
-```
+### Server Features
 
-### Example
+- 📊 Connected users display
+- 🔍 Log filtering via input bar
+- 📜 Scrollable log history
 
-![example_image](./public/example.png)
+---
 
-### Some Features
+## 🛣️ Roadmap
 
-#### **Client:**
+- [ ] 🔐 End-to-end encryption
+- [ ] 💬 Multiple chat rooms
+- [ ] 📨 Direct messaging (DMs)
+- [ ] 🎨 Customizable themes
+- [ ] 📁 File sharing
 
-The client has a modern TUI (Terminal User Interface) built with [libvaxis](https://github.com/rockorager/libvaxis):
+---
 
-This includes a nice chat box, inout and other stuff. As some basic controls for exiting, refreshing and scrolling.
+## 🤝 Contributing
 
-**Commands:**
+Contributions are welcome! Feel free to open issues or submit pull requests.
 
-- `/exit`: Exit the application
-- `/clear`: Clear the message history
-- `/help`: Show available commands
-- More to come
+---
 
-#### Server
+## 📄 License
 
-The server has a modern TUI (Terminal User Interface) built with [libvaxis](https://github.com/rockorager/libvaxis):
+This project is licensed under the **GNU Affero General Public License v3.0** — see the [LICENSE](LICENSE) file for details.
 
-This includes basic infos nicely presented like connected users etc. As well as a input bar for filtering through the logs
-
-### Future Work
-
-Additional TUI improvements planned:
-
-- Add other Chats box (multiple chat rooms)
-
-Additional improvements planned:
-
-- Direct message command inside server
-- Encryption
-- And much more
