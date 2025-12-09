@@ -60,21 +60,27 @@ pub const time = struct {
 
 pub fn printHelp(progName: []const u8) void {
     std.debug.print(
-        \\Usage: {s} <server|client> [OPTIONS] <IP> <PORT>
+        \\Usage: {s} <server|client> [OPTIONS]
         \\
         \\Options:
-        \\  server                              Start the server.
+        \\  server [OPTIONS]                    Start the server.
         \\  client [OPTIONS] <IP> <PORT>        Start the client and connect to the specified IP and PORT.
+        \\
+        \\Server Options:
+        \\  -p, --port <port>       Set the server port (default: 8080, 0 for any available)
+        \\  -s, --size <size>       Set max number of clients (1-4095, default: 4095)
         \\
         \\Client Options:
         \\  -u, --username <name>   Set username for chat messages (max 23 characters)
         \\
         \\Examples:
         \\  {s} server
+        \\  {s} server -p 9000
+        \\  {s} server --port 0 --size 100
         \\  {s} client 127.0.0.1 8080
         \\  {s} client -u Alice 127.0.0.1 8080
         \\  {s} client 127.0.0.1 8080 -u Bob
         \\  {s} client --username Charlie 127.0.0.1 8080
         \\
-    , .{ progName, progName, progName, progName, progName, progName });
+    , .{ progName, progName, progName, progName, progName, progName, progName, progName });
 }
