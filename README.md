@@ -61,22 +61,59 @@ Host a chat room for others to join:
 ./zignal server
 ```
 
+#### Server Options
+
+| Option | Description |
+|--------|-------------|
+| `-p, --port <port>` | Set the server port (default: 8080, use 0 for any available) |
+| `-s, --size <size>` | Set max number of clients (1-4095, default: 4095) |
+
+```bash
+# Start with default settings (port 8080, max 4095 clients)
+./zignal server
+
+# Start on a custom port
+./zignal server -p 9000
+./zignal server --port 9000
+
+# Start with limited clients
+./zignal server -s 100
+./zignal server --size 100
+
+# Combine options
+./zignal server -p 9000 -s 50
+./zignal server --port 0 --size 100  # Port 0 assigns any available port
+```
+
 Share your IP address and port with others on your network so they can connect!
 
 ### Joining as a Client
 
 ```bash
 ./zignal client <IP> <PORT>
+```
 
+| Option | Description |
+|--------|-------------|
+| `-u, --username <port>` | Set your username to see in the chat (default: Anonymous) |
+
+```bash
 # With a custom username
+./zignal client <IP> <PORT> -u YourName
+./zignal client <IP> <PORT> --username YourName
+
 ./zignal client -u YourName <IP> <PORT>
+./zignal client --username YourName <IP> <PORT>
 ```
 
 ### Examples
 
 ```bash
-# Start a server
+# Start a server with defaults
 ./zignal server
+
+# Start a server on port 9000 with max 50 clients
+./zignal server -p 9000 -s 50
 
 # Connect to localhost
 ./zignal client 127.0.0.1 8080
@@ -95,6 +132,11 @@ Share your IP address and port with others on your network so they can connect!
 ---
 
 ## 🎮 Controls & Commands
+
+### Client Features
+
+- 📜 Scrollable chat history
+- 🎮 custom commands
 
 ### Client Commands
 

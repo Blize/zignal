@@ -3,11 +3,6 @@ const posix = std.posix;
 const TuiClient = @import("tui.zig").TuiClient;
 const utils = @import("../utils.zig");
 
-// ============================================================================
-// Commands
-// ============================================================================
-
-/// Client commands that can be entered in chat
 pub const Command = enum {
     exit,
     clear,
@@ -25,11 +20,6 @@ pub const Command = enum {
     }
 };
 
-// ============================================================================
-// Chat Message
-// ============================================================================
-
-/// A single chat message with content and timestamp
 pub const ChatMessage = struct {
     content: []const u8,
     timestamp: i64,
@@ -52,10 +42,6 @@ pub const ChatMessage = struct {
         return utils.time.formatTimestamp(self.timestamp, buf);
     }
 };
-
-// ============================================================================
-// Client
-// ============================================================================
 
 pub const Client = struct {
     socket: posix.socket_t,

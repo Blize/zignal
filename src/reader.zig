@@ -25,32 +25,23 @@ pub const Reader = struct {
         allocator.free(self.buf);
     }
 
-    /// Try to read a complete message from the socket.
-    /// Returns:
-    ///   - ![]const u8 on success (the message bytes)
-    ///   - null if no complete message is available yet (WouldBlock or incomplete)
-    ///   - error.Closed if the connection is closed (0 bytes read)
     pub fn readMessage(self: *Reader, socket: posix.socket_t) !?[]const u8 {
         var buf = self.buf;
 
         while (true) {
-            // Try to extract a complete message from our buffer
             if (try self.bufferedMessage()) |msg| {
                 return msg;
             }
 
-            // No complete message yet, try to read more from the socket
             const pos = self.pos;
             const n = posix.read(socket, buf[pos..]) catch |err| switch (err) {
                 error.WouldBlock => {
-                    // No data available right now, return null
                     return null;
                 },
                 else => return err,
             };
 
             if (n == 0) {
-                // Connection closed
                 return error.Closed;
             }
 
@@ -58,14 +49,12 @@ pub const Reader = struct {
         }
     }
 
-    /// Read a complete message from the socket
-    /// Returns the message bytes or null on disconnect
     pub fn readClientMessage(socket: posix.socket_t, buffer: *[BUFFER_SIZE]u8) !?[]u8 {
         var len_buf: [4]u8 = undefined;
         const len_read = try posix.read(socket, &len_buf);
 
         if (len_read == 0) {
-            return null; // Connection closed
+            return null;
         }
 
         if (len_read != 4) {
@@ -81,7 +70,7 @@ pub const Reader = struct {
         while (total_read < msg_len) {
             const chunk = try posix.read(socket, buffer[total_read..msg_len]);
             if (chunk == 0) {
-                return null; // Connection closed mid-message
+                return null;
             }
             total_read += chunk;
         }
@@ -93,8 +82,6 @@ pub const Reader = struct {
         return buffer[0..msg_len];
     }
 
-    /// Check if we have a complete buffered message available
-    /// Returns the message if available, or null if we need more data
     fn bufferedMessage(self: *Reader) !?[]const u8 {
         const buf = self.buf;
         const pos = self.pos;
@@ -103,30 +90,23 @@ pub const Reader = struct {
         std.debug.assert(pos >= start);
         const unprocessed = buf[start..pos];
 
-        // Need at least 4 bytes for the length prefix
         if (unprocessed.len < 4) {
             try self.ensureSpace(4 - unprocessed.len);
             return null;
         }
 
         const message_len = std.mem.readInt(u32, unprocessed[0..4], .little);
-
-        // Total length: 4 bytes for prefix + message content
         const total_len = message_len + 4;
 
-        // Check if we have the complete message
         if (unprocessed.len < total_len) {
             try self.ensureSpace(total_len);
             return null;
         }
 
-        // We have a complete message. Mark it as consumed and return it.
         self.start += total_len;
         return unprocessed[4..total_len];
     }
 
-    /// Ensure we have enough space in the buffer to accommodate `space` bytes
-    /// This may compact the buffer by moving unprocessed data to the beginning
     fn ensureSpace(self: *Reader, space: usize) error{BufferTooSmall}!void {
         const buf = self.buf;
         if (buf.len < space) {
@@ -139,7 +119,6 @@ pub const Reader = struct {
             return;
         }
 
-        // Compact the buffer: move unprocessed data to the beginning
         const unprocessed = buf[start..self.pos];
         std.mem.copyForwards(u8, buf[0..unprocessed.len], unprocessed);
         self.start = 0;

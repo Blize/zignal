@@ -21,7 +21,6 @@ const ScrollableList = components.ScrollableList;
 
 const colors = utils.colors;
 
-/// Event types for our TUI application
 const Event = union(enum) {
     key_press: Key,
     winsize: vaxis.Winsize,
@@ -29,7 +28,6 @@ const Event = union(enum) {
     focus_out,
 };
 
-/// TUI Client for the chat application
 pub const TuiClient = struct {
     allocator: std.mem.Allocator,
     socket: posix.socket_t,
@@ -39,20 +37,16 @@ pub const TuiClient = struct {
     vx: vaxis.Vaxis,
     tty: vaxis.Tty,
 
-    // Chat state
     messages: ScrollableList(ChatMessage),
     text_input: InputField,
 
-    // Running state
     running: bool,
     connected: bool,
     reconnecting: bool,
     socket_valid: bool,
 
-    // Receiver thread
     receiver_thread: ?std.Thread,
 
-    // Thread-safe message queue
     pending_messages: std.ArrayList([]const u8),
     message_mutex: std.Thread.Mutex,
 
@@ -139,7 +133,6 @@ pub const TuiClient = struct {
         while (self.running) {
             self.processPendingMessages();
 
-            // Poll for events with timeout
             while (loop.tryEvent()) |event| {
                 try self.handleEvent(event);
             }
@@ -164,13 +157,11 @@ pub const TuiClient = struct {
                     return;
                 }
 
-                // Handle Enter key - send message
                 if (key.matches(Key.enter, .{})) {
                     try self.sendMessage();
                     return;
                 }
 
-                // Handle scroll with PageUp/PageDown (5 lines at a time)
                 if (key.matches(Key.page_up, .{})) {
                     var i: usize = 0;
                     while (i < 5) : (i += 1) {
@@ -187,7 +178,6 @@ pub const TuiClient = struct {
                     return;
                 }
 
-                // Handle scroll with arrow keys (1 line at a time)
                 if (key.matches(Key.up, .{})) {
                     self.messages.scrollUp();
                     return;
@@ -198,7 +188,6 @@ pub const TuiClient = struct {
                     return;
                 }
 
-                // Pass to text input widget
                 try self.text_input.handleKeyPress(key);
             },
             .winsize => |ws| {
@@ -219,19 +208,16 @@ pub const TuiClient = struct {
             return; // Terminal too small
         }
 
-        // Border style using Zig color
         const border_style: Cell.Style = .{
             .fg = colors.zig,
         };
 
-        // Draw title bar
         const title_style: Cell.Style = .{
             .fg = colors.background,
             .bg = colors.zig,
             .bold = true,
         };
 
-        // Fill title row
         var col: u16 = 0;
         while (col < width) : (col += 1) {
             win.writeCell(col, 0, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = title_style });
@@ -252,7 +238,6 @@ pub const TuiClient = struct {
         const status_segment = [_]Cell.Segment{.{ .text = status_indicator, .style = status_indicator_style }};
         _ = win.print(&status_segment, .{ .col_offset = status_start });
 
-        // === CHAT VIEW with border ===
         const input_height: u16 = 3;
         const chat_height: u16 = @intCast(@max(1, height - 4 - input_height));
         const chat_area = win.child(.{
@@ -266,13 +251,10 @@ pub const TuiClient = struct {
             },
         });
 
-        // Render messages inside chat area (account for border)
         self.renderMessages(chat_area, chat_height - 2);
 
-        // === INPUT AREA with border ===
         const input_row: u16 = 1 + chat_height;
 
-        // Input box with border
         const input_box = win.child(.{
             .x_off = 0,
             .y_off = input_row,
@@ -284,7 +266,6 @@ pub const TuiClient = struct {
             },
         });
 
-        // Draw text input inside the bordered box
         self.text_input.draw(input_box);
 
         try self.vx.render(self.tty.writer());
@@ -293,7 +274,6 @@ pub const TuiClient = struct {
     fn renderMessages(self: *TuiClient, area: Window, max_lines: u16) void {
         if (self.messages.count() == 0) return;
 
-        // Render function for each message
         const renderMessage = struct {
             pub fn render(msg: *const ChatMessage, row: u16, area_: Window) void {
                 var timestamp_buf: [8]u8 = undefined;
@@ -301,7 +281,6 @@ pub const TuiClient = struct {
 
                 const timestamp_style: Cell.Style = .{ .fg = colors.timestamp };
 
-                // Determine message style based on content
                 if (std.mem.startsWith(u8, msg.content, "[System]")) {
                     const style: Cell.Style = .{ .fg = colors.zig, .italic = true };
                     const segments = [_]Cell.Segment{
@@ -327,12 +306,10 @@ pub const TuiClient = struct {
                     };
                     _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
                 } else if (std.mem.indexOf(u8, msg.content, ": ")) |colon_pos| {
-                    // Render username with unique color, message in text color
                     const username_part = msg.content[0..colon_pos];
                     const separator = ": ";
                     const message_part = msg.content[colon_pos + 2 ..];
 
-                    // Get color based on username hash
                     const user_color = colors.forUsername(username_part);
                     const username_style: Cell.Style = .{ .fg = user_color, .bold = true };
                     const text_style: Cell.Style = .{ .fg = colors.text };
@@ -346,7 +323,6 @@ pub const TuiClient = struct {
                     };
                     _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
                 } else {
-                    // Regular message
                     const style: Cell.Style = .{ .fg = colors.text };
                     const segments = [_]Cell.Segment{
                         .{ .text = timestamp, .style = timestamp_style },
@@ -415,7 +391,6 @@ pub const TuiClient = struct {
         const msg = try ChatMessage.create(self.allocator, content);
         try self.messages.append(msg);
 
-        // Auto-scroll to bottom when new message arrives
         self.messages.scroll_offset = 0;
     }
 

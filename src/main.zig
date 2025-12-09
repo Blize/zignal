@@ -26,8 +26,50 @@ pub fn main() !void {
     }
 
     if (std.mem.eql(u8, args[1], "server")) {
-        const address = try net.Address.parseIp4("0.0.0.0", 8080);
-        var server = try Server.init(allocator, address, config.MAX_CLIENTS);
+        var port: u16 = 8080;
+        var max_clients: usize = config.MAX_CLIENTS - 1;
+
+        var arg_index: usize = 2;
+        while (arg_index < args.len) {
+            if (std.mem.eql(u8, args[arg_index], "-p") or std.mem.eql(u8, args[arg_index], "--port")) {
+                if (arg_index + 1 >= args.len) {
+                    std.debug.print("Error: Port flag requires a value.\n", .{});
+                    printHelp(args[0]);
+                    return error.InvalidArguments;
+                }
+                port = std.fmt.parseInt(u16, args[arg_index + 1], 10) catch {
+                    std.debug.print("Error: Invalid port number '{s}'.\n", .{args[arg_index + 1]});
+                    printHelp(args[0]);
+                    return error.InvalidArguments;
+                };
+                arg_index += 2;
+            } else if (std.mem.eql(u8, args[arg_index], "-s") or std.mem.eql(u8, args[arg_index], "--size")) {
+                if (arg_index + 1 >= args.len) {
+                    std.debug.print("Error: Size flag requires a value.\n", .{});
+                    printHelp(args[0]);
+                    return error.InvalidArguments;
+                }
+                const size = std.fmt.parseInt(usize, args[arg_index + 1], 10) catch {
+                    std.debug.print("Error: Invalid size value '{s}'.\n", .{args[arg_index + 1]});
+                    printHelp(args[0]);
+                    return error.InvalidArguments;
+                };
+                if (size == 0 or size > 4095) {
+                    std.debug.print("Error: Size must be between 1 and 4095.\n", .{});
+                    printHelp(args[0]);
+                    return error.InvalidArguments;
+                }
+                max_clients = size;
+                arg_index += 2;
+            } else {
+                std.debug.print("Error: Unknown server option '{s}'.\n", .{args[arg_index]});
+                printHelp(args[0]);
+                return error.InvalidArguments;
+            }
+        }
+
+        const address = try net.Address.parseIp4("0.0.0.0", port);
+        var server = try Server.init(allocator, address, max_clients);
         defer server.deinit();
         try server.start();
     } else if (std.mem.eql(u8, args[1], "client")) {
@@ -35,7 +77,6 @@ pub fn main() !void {
         var ip: ?[]const u8 = null;
         var port: ?u16 = null;
 
-        // Parse arguments for client
         var arg_index: usize = 2;
 
         while (arg_index < args.len) {
@@ -64,7 +105,6 @@ pub fn main() !void {
             }
         }
 
-        // Validate required arguments
         if (ip == null or port == null) {
             std.debug.print("Error: Missing required arguments (IP and PORT).\n", .{});
             printHelp(args[0]);
