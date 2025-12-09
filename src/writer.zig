@@ -10,7 +10,6 @@ pub const Writer = struct {
         };
     }
 
-    /// Write a message to this socket with length prefix
     pub fn writeMessage(self: Writer, message: []const u8) !void {
         var len_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &len_buf, @intCast(message.len), .little);
@@ -23,7 +22,6 @@ pub const Writer = struct {
         _ = try posix.writev(self.socket, &vec);
     }
 
-    /// Write a message to this socket with error handling
     pub fn writeMessageSafe(self: Writer, message: []const u8) bool {
         self.writeMessage(message) catch |err| {
             std.log.warn("[Writer]: Failed to write message: {}", .{err});
@@ -32,7 +30,6 @@ pub const Writer = struct {
         return true;
     }
 
-    /// Write to a specific socket (useful for broadcasting)
     pub fn writeToSocket(socket: posix.socket_t, message: []const u8) !void {
         var len_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &len_buf, @intCast(message.len), .little);
@@ -45,7 +42,6 @@ pub const Writer = struct {
         _ = try posix.writev(socket, &vec);
     }
 
-    /// Write to a specific socket with error handling
     pub fn writeToSocketSafe(socket: posix.socket_t, message: []const u8) bool {
         Writer.writeToSocket(socket, message) catch |err| {
             std.log.warn("[Writer]: Failed to write to socket: {}", .{err});
@@ -54,7 +50,6 @@ pub const Writer = struct {
         return true;
     }
 
-    /// Broadcast message to multiple sockets (excluding sender)
     pub fn broadcastMessage(sockets: []const posix.socket_t, message: []const u8, excludeSocket: ?posix.socket_t) void {
         var len_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &len_buf, @intCast(message.len), .little);
@@ -75,7 +70,6 @@ pub const Writer = struct {
         }
     }
 
-    /// Broadcast message to all sockets in the list
     pub fn broadcastToAll(sockets: []const posix.socket_t, message: []const u8) void {
         Writer.broadcastMessage(sockets, message, null);
     }

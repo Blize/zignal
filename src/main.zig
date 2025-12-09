@@ -27,9 +27,8 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, args[1], "server")) {
         var port: u16 = 8080;
-        var max_clients: usize = config.MAX_CLIENTS - 1; // Default to 4095
+        var max_clients: usize = config.MAX_CLIENTS - 1;
 
-        // Parse server arguments
         var arg_index: usize = 2;
         while (arg_index < args.len) {
             if (std.mem.eql(u8, args[arg_index], "-p") or std.mem.eql(u8, args[arg_index], "--port")) {
@@ -78,7 +77,6 @@ pub fn main() !void {
         var ip: ?[]const u8 = null;
         var port: ?u16 = null;
 
-        // Parse arguments for client
         var arg_index: usize = 2;
 
         while (arg_index < args.len) {
@@ -107,7 +105,6 @@ pub fn main() !void {
             }
         }
 
-        // Validate required arguments
         if (ip == null or port == null) {
             std.debug.print("Error: Missing required arguments (IP and PORT).\n", .{});
             printHelp(args[0]);

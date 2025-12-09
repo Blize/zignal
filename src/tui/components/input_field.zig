@@ -23,12 +23,10 @@ pub const InputField = struct {
         self.inner.deinit();
     }
 
-    /// Handle key input for this input field
     pub fn handleKeyPress(self: *InputField, key: Key) !void {
         try self.inner.update(.{ .key_press = key });
     }
 
-    /// Get the current input buffer content as a single slice
     pub fn getText(self: *const InputField, buffer: []u8) usize {
         const first = self.inner.buf.firstHalf();
         const second = self.inner.buf.secondHalf();
@@ -39,7 +37,7 @@ pub const InputField = struct {
         }
 
         if (total_len > buffer.len) {
-            return 0; // Buffer too small
+            return 0;
         }
 
         @memcpy(buffer[0..first.len], first);
@@ -47,7 +45,6 @@ pub const InputField = struct {
         return total_len;
     }
 
-    /// Get the current input as a slice (requires external buffer management)
     pub fn getTextAsSlice(self: *const InputField) struct { first: []const u8, second: []const u8 } {
         return .{
             .first = self.inner.buf.firstHalf(),
@@ -55,40 +52,33 @@ pub const InputField = struct {
         };
     }
 
-    /// Clear the input buffer
     pub fn clear(self: *InputField) void {
         self.inner.buf.clearRetainingCapacity();
     }
 
-    /// Check if input is empty
     pub fn isEmpty(self: *const InputField) bool {
         const first = self.inner.buf.firstHalf();
         const second = self.inner.buf.secondHalf();
         return first.len == 0 and second.len == 0;
     }
 
-    /// Get total length of input
     pub fn len(self: *const InputField) usize {
         return self.inner.buf.firstHalf().len + self.inner.buf.secondHalf().len;
     }
 
-    /// Draw the input field in the given window
     pub fn draw(self: *InputField, area: Window) void {
         self.inner.draw(area);
     }
 
-    /// Draw the input field with a label
     pub fn drawWithLabel(
         self: *InputField,
         area: Window,
         label: []const u8,
         label_style: Cell.Style,
     ) void {
-        // Label
         const label_segment = [_]Cell.Segment{.{ .text = label, .style = label_style }};
         _ = area.print(&label_segment, .{ .row_offset = 0 });
 
-        // Input area (after label)
         const label_len: u16 = @intCast(label.len);
         const input_area = area.child(.{
             .x_off = label_len,

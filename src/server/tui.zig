@@ -15,7 +15,6 @@ const ScrollableList = components.ScrollableList;
 
 const colors = utils.colors;
 
-/// Event types for server TUI
 const Event = union(enum) {
     key_press: Key,
     winsize: vaxis.Winsize,
@@ -23,7 +22,6 @@ const Event = union(enum) {
     focus_out,
 };
 
-/// Log entry with timestamp and level
 pub const LogEntry = struct {
     message: []const u8,
     timestamp: i64,
@@ -74,7 +72,6 @@ pub const LogEntry = struct {
     }
 };
 
-/// Server TUI for monitoring
 pub const ServerTui = struct {
     allocator: std.mem.Allocator,
 
@@ -88,20 +85,16 @@ pub const ServerTui = struct {
     connected: *usize,
     max_clients: usize,
 
-    // Display buffers (persistent for rendering)
     port_display: [8]u8,
     port_display_len: usize,
     conn_display: [32]u8,
     conn_display_len: usize,
 
-    // Log state
     logs: ScrollableList(LogEntry),
     filter_input: InputField,
 
-    // Running state
     running: *bool,
 
-    // Thread-safe log queue
     pending_logs: std.ArrayList(struct { msg: []const u8, level: LogEntry.Level }),
     log_mutex: std.Thread.Mutex,
 
@@ -142,20 +135,17 @@ pub const ServerTui = struct {
             .log_mutex = .{},
         };
 
-        // Explicitly clear the filter input buffer to prevent random characters on startup
         self.filter_input.clear();
 
         return self;
     }
 
     pub fn deinit(self: *ServerTui) void {
-        // Clean up logs
         for (self.logs.items.items) |*entry| {
             entry.destroy();
         }
         self.logs.deinit();
 
-        // Clean up pending logs
         self.log_mutex.lock();
         for (self.pending_logs.items) |item| {
             self.allocator.free(item.msg);
@@ -186,10 +176,8 @@ pub const ServerTui = struct {
         try self.addLog("Server TUI started", .info);
 
         while (self.running.*) {
-            // Process pending logs from server thread
             self.processPendingLogs();
 
-            // Poll for events
             while (loop.tryEvent()) |event| {
                 try self.handleEvent(event);
             }
@@ -200,7 +188,6 @@ pub const ServerTui = struct {
         }
     }
 
-    /// Queue a log message from another thread
     pub fn queueLog(self: *ServerTui, message: []const u8, level: LogEntry.Level) void {
         const owned = self.allocator.dupe(u8, message) catch return;
 
@@ -236,13 +223,11 @@ pub const ServerTui = struct {
                     return;
                 }
 
-                // Clear filter with Escape
                 if (key.matches(Key.escape, .{})) {
                     self.filter_input.clear();
                     return;
                 }
 
-                // Scroll logs with arrow keys
                 if (key.matches(Key.up, .{})) {
                     self.logs.scrollUp();
                     return;
@@ -253,7 +238,6 @@ pub const ServerTui = struct {
                     return;
                 }
 
-                // Pass to filter input
                 try self.filter_input.handleKeyPress(key);
             },
             .winsize => |ws| {
@@ -271,13 +255,12 @@ pub const ServerTui = struct {
         const height = win.height;
 
         if (height < 12 or width < 50) {
-            return; // Terminal too small
+            return;
         }
 
         const border_style: Cell.Style = .{ .fg = colors.zig };
         const title_style: Cell.Style = .{ .fg = colors.background, .bg = colors.zig, .bold = true };
 
-        // === TITLE BAR ===
         var col: u16 = 0;
         while (col < width) : (col += 1) {
             win.writeCell(col, 0, .{ .char = .{ .grapheme = " ", .width = 1 }, .style = title_style });
@@ -287,7 +270,6 @@ pub const ServerTui = struct {
         const title_segment = [_]Cell.Segment{.{ .text = title_text, .style = title_style }};
         _ = win.print(&title_segment, .{ .col_offset = title_start });
 
-        // === INFO BOX ===
         const info_height: u16 = 5;
         const info_box = win.child(.{
             .x_off = 0,
@@ -298,7 +280,6 @@ pub const ServerTui = struct {
         });
         self.renderInfoBox(info_box);
 
-        // === FILTER INPUT ===
         const filter_height: u16 = 3;
         const filter_row: u16 = 1 + info_height;
         const filter_box = win.child(.{
@@ -310,7 +291,6 @@ pub const ServerTui = struct {
         });
         self.renderFilterBox(filter_box);
 
-        // === LOGS BOX ===
         const logs_row: u16 = filter_row + filter_height;
         const logs_height: u16 = @intCast(@max(1, height - logs_row - 1));
         const logs_box = win.child(.{
@@ -333,14 +313,12 @@ pub const ServerTui = struct {
             .bold = true,
         };
 
-        // Row 0: IP
         const ip_label = [_]Cell.Segment{
             .{ .text = "  IP: ", .style = label_style },
             .{ .text = self.ip, .style = value_style },
         };
         _ = area.print(&ip_label, .{ .row_offset = 0 });
 
-        // Row 1: Port - format into persistent buffer
         const port_text = std.fmt.bufPrint(&self.port_display, "{d}", .{self.port.*}) catch "?";
         self.port_display_len = port_text.len;
         const port_label = [_]Cell.Segment{
@@ -349,7 +327,6 @@ pub const ServerTui = struct {
         };
         _ = area.print(&port_label, .{ .row_offset = 1 });
 
-        // Row 2: Connected - format into persistent buffer
         const conn_text = std.fmt.bufPrint(&self.conn_display, "{d}/{d}", .{ self.connected.*, self.max_clients }) catch "?/?";
         self.conn_display_len = conn_text.len;
         const conn_label = [_]Cell.Segment{
@@ -367,12 +344,10 @@ pub const ServerTui = struct {
     fn renderLogs(self: *ServerTui, area: Window, max_lines: u16) void {
         if (max_lines == 0) return;
 
-        // Get current filter
         var filter_buf: [256]u8 = undefined;
         const filter_len = self.filter_input.getText(&filter_buf);
         const filter = filter_buf[0..filter_len];
 
-        // Helper function to check if entry should be included
         const shouldInclude = struct {
             pub fn call(entry: *const LogEntry, filter_text: []const u8) bool {
                 if (filter_text.len == 0) return true;
@@ -380,7 +355,6 @@ pub const ServerTui = struct {
             }
         }.call;
 
-        // Helper function to render a single log entry
         const renderEntry = struct {
             pub fn call(entry: *const LogEntry, row: u16, area_: Window) void {
                 var timestamp_buf: [8]u8 = undefined;
@@ -409,7 +383,6 @@ pub const ServerTui = struct {
         const entry = try LogEntry.create(self.allocator, message, level);
         try self.logs.append(entry);
 
-        // Limit max logs to prevent memory issues
         const max_logs: usize = 1000;
         while (self.logs.count() > max_logs) {
             if (self.logs.removeAt(0)) |old_entry| {
