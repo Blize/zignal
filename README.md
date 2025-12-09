@@ -95,15 +95,15 @@ Share your IP address and port with others on your network so they can connect!
 
 | Option | Description |
 |--------|-------------|
-| `-u, --username <port>` | Set your username to see in the chat (default: Anonymous) |
+| `-u, --username <username>` | Set your username to see in the chat (default: Anonymous) |
 
 ```bash
 # With a custom username
 ./zignal client <IP> <PORT> -u YourName
 ./zignal client <IP> <PORT> --username YourName
 
-./zignal client -u YourName <IP> <PORT>
-./zignal client --username YourName <IP> <PORT>
+./zignal client -u <username> <IP> <PORT>
+./zignal client --username <username> <IP> <PORT>
 ```
 
 ### Examples
