@@ -93,14 +93,16 @@ Share your IP address and port with others on your network so they can connect!
 ./zignal client <IP> <PORT>
 ```
 
+#### Client Options
+
 | Option | Description |
 |--------|-------------|
 | `-u, --username <username>` | Set your username to see in the chat (default: Anonymous) |
 
 ```bash
 # With a custom username
-./zignal client <IP> <PORT> -u YourName
-./zignal client <IP> <PORT> --username YourName
+./zignal client <IP> <PORT> -u <username>
+./zignal client <IP> <PORT> --username <username>
 
 ./zignal client -u <username> <IP> <PORT>
 ./zignal client --username <username> <IP> <PORT>
@@ -136,7 +138,7 @@ Share your IP address and port with others on your network so they can connect!
 ### Client Features
 
 - 📜 Scrollable chat history
-- 🎮 custom commands
+- 🎮 Custom commands
 
 ### Client Commands
 
