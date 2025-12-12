@@ -2,6 +2,7 @@ const std = @import("std");
 const posix = std.posix;
 const TuiClient = @import("tui.zig").TuiClient;
 const utils = @import("../utils.zig");
+const config = @import("../config.zig");
 
 pub const Command = enum {
     exit,
@@ -47,7 +48,7 @@ pub const Client = struct {
     socket: posix.socket_t,
     address: std.net.Address,
     id: u32,
-    username: [24]u8,
+    username: [config.MAX_USERNAME_LEN]u8,
     username_len: usize,
 
     pub fn startClient(self: *Client) !void {

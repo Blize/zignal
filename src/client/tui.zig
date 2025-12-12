@@ -6,6 +6,7 @@ const config = @import("../config.zig");
 const utils = @import("../utils.zig");
 const Writer = @import("../writer.zig").Writer;
 const Reader = @import("../reader.zig").Reader;
+const Packet = @import("../networking/packet.zig").Packet;
 const client = @import("client.zig");
 const components = @import("../tui/components.zig");
 const ChatMessage = client.ChatMessage;
@@ -364,20 +365,26 @@ pub const TuiClient = struct {
             return;
         }
 
-        var formatted_message: [BUFFER_SIZE]u8 = undefined;
         const display_username = if (self.username.len > 0) self.username else "Anonymous";
 
-        const formatted = std.fmt.bufPrint(&formatted_message, "{s}: {s}", .{
-            display_username,
-            message,
-        }) catch {
+        // Create and serialize a Packet
+        const packet = Packet.createMessage(display_username, message);
+        var packet_buf: [BUFFER_SIZE]u8 = undefined;
+        const serialized = packet.serialize(&packet_buf) catch |err| {
+            var err_buf: [64]u8 = undefined;
+            const err_msg = std.fmt.bufPrint(&err_buf, "[System] Failed to serialize: {}", .{err}) catch "[System] Failed to serialize";
+            try self.addMessage(err_msg);
             return;
         };
 
+        // Display locally
+        var formatted_message: [BUFFER_SIZE]u8 = undefined;
+        const formatted = packet.message.format(&formatted_message);
         try self.addMessage(formatted);
 
+        // Send serialized packet
         const writer = Writer.init(self.socket);
-        writer.writeMessage(formatted) catch |err| {
+        writer.writeMessage(serialized) catch |err| {
             var err_buf: [64]u8 = undefined;
             const err_msg = std.fmt.bufPrint(&err_buf, "[System] Failed to send message: {}", .{err}) catch "[System] Failed to send message";
             try self.addMessage(err_msg);
@@ -450,13 +457,38 @@ pub const TuiClient = struct {
                 continue;
             }
 
-            const owned = self.allocator.dupe(u8, message.?) catch continue;
-
-            self.message_mutex.lock();
-            self.pending_messages.append(self.allocator, owned) catch {
-                self.allocator.free(owned);
+            // Deserialize the packet
+            const packet = Packet.deserialize(message.?) catch {
+                // Fallback: treat as raw text for backwards compatibility
+                const owned = self.allocator.dupe(u8, message.?) catch continue;
+                self.message_mutex.lock();
+                self.pending_messages.append(self.allocator, owned) catch {
+                    self.allocator.free(owned);
+                };
+                self.message_mutex.unlock();
+                continue;
             };
-            self.message_mutex.unlock();
+
+            // Handle the packet based on type
+            switch (packet) {
+                .message => |msg| {
+                    var format_buf: [BUFFER_SIZE]u8 = undefined;
+                    const formatted = msg.format(&format_buf);
+                    const owned = self.allocator.dupe(u8, formatted) catch continue;
+
+                    self.message_mutex.lock();
+                    self.pending_messages.append(self.allocator, owned) catch {
+                        self.allocator.free(owned);
+                    };
+                    self.message_mutex.unlock();
+                },
+                .handshake => {
+                    // TODO: Handle handshake packets
+                },
+                .config => {
+                    // TODO: Handle config packets
+                },
+            }
         }
     }
 
