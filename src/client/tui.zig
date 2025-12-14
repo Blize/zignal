@@ -18,6 +18,7 @@ const Key = vaxis.Key;
 const Window = vaxis.Window;
 const InputField = components.InputField;
 const ScrollableList = components.ScrollableList;
+const renderChatMessage = components.renderChatMessage;
 
 const colors = utils.colors;
 
@@ -278,59 +279,7 @@ pub const TuiClient = struct {
             pub fn render(msg: *const ChatMessage, row: u16, area_: Window) void {
                 var timestamp_buf: [8]u8 = undefined;
                 const timestamp = msg.getTimestampStr(&timestamp_buf);
-
-                const timestamp_style: Cell.Style = .{ .fg = colors.timestamp };
-
-                if (std.mem.startsWith(u8, msg.content, "[System]")) {
-                    const style: Cell.Style = .{ .fg = colors.zig, .italic = true };
-                    const segments = [_]Cell.Segment{
-                        .{ .text = timestamp, .style = timestamp_style },
-                        .{ .text = " ", .style = .{} },
-                        .{ .text = msg.content, .style = style },
-                    };
-                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
-                } else if (std.mem.startsWith(u8, msg.content, "[Server]")) {
-                    const style: Cell.Style = .{ .fg = colors.zig, .bold = true };
-                    const segments = [_]Cell.Segment{
-                        .{ .text = timestamp, .style = timestamp_style },
-                        .{ .text = " ", .style = .{} },
-                        .{ .text = msg.content, .style = style },
-                    };
-                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
-                } else if (std.mem.startsWith(u8, msg.content, "[Help]")) {
-                    const style: Cell.Style = .{ .fg = colors.zig_dim, .italic = true };
-                    const segments = [_]Cell.Segment{
-                        .{ .text = timestamp, .style = timestamp_style },
-                        .{ .text = " ", .style = .{} },
-                        .{ .text = msg.content, .style = style },
-                    };
-                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
-                } else if (std.mem.indexOf(u8, msg.content, ": ")) |colon_pos| {
-                    const username_part = msg.content[0..colon_pos];
-                    const separator = ": ";
-                    const message_part = msg.content[colon_pos + 2 ..];
-
-                    const user_color = colors.forUsername(username_part);
-                    const username_style: Cell.Style = .{ .fg = user_color, .bold = true };
-                    const text_style: Cell.Style = .{ .fg = colors.text };
-
-                    const segments = [_]Cell.Segment{
-                        .{ .text = timestamp, .style = timestamp_style },
-                        .{ .text = " ", .style = .{} },
-                        .{ .text = username_part, .style = username_style },
-                        .{ .text = separator, .style = username_style },
-                        .{ .text = message_part, .style = text_style },
-                    };
-                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
-                } else {
-                    const style: Cell.Style = .{ .fg = colors.text };
-                    const segments = [_]Cell.Segment{
-                        .{ .text = timestamp, .style = timestamp_style },
-                        .{ .text = " ", .style = .{} },
-                        .{ .text = msg.content, .style = style },
-                    };
-                    _ = area_.print(&segments, .{ .row_offset = row, .wrap = .word });
-                }
+                renderChatMessage(msg.content, timestamp, row, area_);
             }
         }.render;
 
