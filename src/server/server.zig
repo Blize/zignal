@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const config = @import("../config.zig");
 const Reader = @import("../reader.zig").Reader;
 const Writer = @import("../writer.zig").Writer;
+const Packet = @import("../networking/packet.zig").Packet;
 const ServerTui = @import("tui.zig").ServerTui;
 const LogEntry = @import("tui.zig").LogEntry;
 
@@ -200,7 +201,22 @@ pub const Server = struct {
                             break;
                         };
 
-                        self.log("Message: {s}", .{msg}, .info);
+                        if (Packet.deserialize(msg)) |packet| {
+                            switch (packet) {
+                                .message => |m| {
+                                    self.log("{s}: {s}", .{ m.sender, m.content }, .info);
+                                },
+                                .handshake => {
+                                    self.log("Received handshake packet", .{}, .info);
+                                },
+                                .config => {
+                                    self.log("Received config packet", .{}, .info);
+                                },
+                            }
+                        } else |_| {
+                            // Fallback for raw text
+                            self.log("Message: {s}", .{msg}, .info);
+                        }
 
                         const sockets = self.allocator.alloc(posix.socket_t, self.connected) catch continue;
                         defer self.allocator.free(sockets);
