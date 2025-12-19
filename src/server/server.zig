@@ -201,7 +201,6 @@ pub const Server = struct {
                             break;
                         };
 
-                        // Try to parse the packet and log its contents
                         if (Packet.deserialize(msg)) |packet| {
                             switch (packet) {
                                 .message => |m| {
@@ -215,7 +214,7 @@ pub const Server = struct {
                                 },
                             }
                         } else |_| {
-                            // Fallback for raw text (backwards compat)
+                            // Fallback for raw text
                             self.log("Message: {s}", .{msg}, .info);
                         }
 

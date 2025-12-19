@@ -367,7 +367,6 @@ pub const TuiClient = struct {
 
         const display_username = if (self.username.len > 0) self.username else "Anonymous";
 
-        // Create and serialize a Packet
         const packet = Packet.createMessage(display_username, message);
         var packet_buf: [BUFFER_SIZE]u8 = undefined;
         const serialized = packet.serialize(&packet_buf) catch |err| {
@@ -382,7 +381,6 @@ pub const TuiClient = struct {
         const formatted = packet.message.format(&formatted_message);
         try self.addMessage(formatted);
 
-        // Send serialized packet
         const writer = Writer.init(self.socket);
         writer.writeMessage(serialized) catch |err| {
             var err_buf: [64]u8 = undefined;
@@ -457,9 +455,8 @@ pub const TuiClient = struct {
                 continue;
             }
 
-            // Deserialize the packet
             const packet = Packet.deserialize(message.?) catch {
-                // Fallback: treat as raw text for backwards compatibility
+                // Fallback: treat as raw text
                 const owned = self.allocator.dupe(u8, message.?) catch continue;
                 self.message_mutex.lock();
                 self.pending_messages.append(self.allocator, owned) catch {
@@ -469,7 +466,6 @@ pub const TuiClient = struct {
                 continue;
             };
 
-            // Handle the packet based on type
             switch (packet) {
                 .message => |msg| {
                     var format_buf: [BUFFER_SIZE]u8 = undefined;
